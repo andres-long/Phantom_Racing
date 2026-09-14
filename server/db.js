@@ -55,6 +55,14 @@ function getMongoDb() {
     const { MongoClient } = require("mongodb");
     const client = new MongoClient(MONGODB_URI);
     mongoDbPromise = client.connect().then((c) => c.db(MONGODB_DB_NAME));
+    // If the connection attempt fails (e.g. a transient network/TLS blip,
+    // or Atlas's IP access list not being updated yet), clear the cache so
+    // the *next* request gets a fresh connection attempt instead of the
+    // same rejected promise forever. Without this, one bad first connection
+    // would permanently wedge every request until the process restarts.
+    mongoDbPromise.catch(() => {
+      mongoDbPromise = null;
+    });
   }
   return mongoDbPromise;
 }

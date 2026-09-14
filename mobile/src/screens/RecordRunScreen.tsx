@@ -32,6 +32,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [deltaMs, setDeltaMs] = useState<number | null>(null);
   const [speedKmh, setSpeedKmh] = useState(0);
+  const [maxSpeedKmh, setMaxSpeedKmh] = useState(0);
   const [progress, setProgress] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
@@ -39,6 +40,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const cumDistRef = useRef<number[]>([]);
   const startTimeRef = useRef<number>(0);
   const finishedRef = useRef(false);
+  const maxSpeedRef = useRef(0);
 
   useEffect(() => {
     (async () => {
@@ -75,7 +77,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     if (!user || !segment) return;
     setSubmitting(true);
     try {
-      const result = await api.submitRun(segmentId, user.deviceId, finalTrace);
+      const result = await api.submitRun(segmentId, user.deviceId, finalTrace, maxSpeedRef.current);
       navigation.replace("RunSummary", { result, segmentName: segment.name, segmentId });
     } catch (e: any) {
       Alert.alert("Run not counted", e.message || "Unknown error", [
@@ -96,6 +98,8 @@ export default function RecordRunScreen({ route, navigation }: Props) {
 
     finishedRef.current = false;
     setTrace([]);
+    maxSpeedRef.current = 0;
+    setMaxSpeedKmh(0);
     startTimeRef.current = Date.now();
     setRecording(true);
 
@@ -108,7 +112,12 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           t: Date.now(),
         };
         setMyPos(point);
-        setSpeedKmh(Math.max(0, (loc.coords.speed ?? 0) * 3.6));
+        const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
+        setSpeedKmh(currentSpeedKmh);
+        if (currentSpeedKmh > maxSpeedRef.current) {
+          maxSpeedRef.current = currentSpeedKmh;
+          setMaxSpeedKmh(currentSpeedKmh);
+        }
 
         setTrace((prev) => {
           const next = [...prev, point];
@@ -189,7 +198,10 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         ) : (
           <Text style={styles.noGhost}>No ghost yet -- you're setting the first time</Text>
         )}
-        <Text style={styles.speed}>{Math.round(speedKmh)} km/h</Text>
+        <Text style={styles.speed}>
+          {Math.round(speedKmh)} km/h{"   "}
+          <Text style={styles.topSpeed}>top {Math.round(maxSpeedKmh)}</Text>
+        </Text>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
         </View>
@@ -225,6 +237,7 @@ const styles = StyleSheet.create({
   delta: { fontSize: 16, fontWeight: "700", textAlign: "center", marginTop: 4 },
   noGhost: { color: "#8e8e96", fontSize: 13, textAlign: "center", marginTop: 4 },
   speed: { color: "#c7c7cf", fontSize: 14, textAlign: "center", marginTop: 8 },
+  topSpeed: { color: "#8e8e96", fontSize: 12 },
   progressTrack: { height: 6, backgroundColor: "#26262f", borderRadius: 3, marginTop: 12, overflow: "hidden" },
   progressFill: { height: 6, backgroundColor: "#3b82f6" },
   button: {

@@ -7,12 +7,11 @@ import {
   LatLng,
 } from "../types";
 
-// IMPORTANT: "localhost" from a physical phone means the phone itself, not
-// your computer. When testing with Expo Go on a real device, set this to
-// your computer's LAN IP (e.g. "http://192.168.1.23:4000") -- both devices
-// need to be on the same Wi-Fi network. The Expo dev server prints your
-// LAN IP on startup, which is usually the same address.
-export const API_BASE_URL = "http://192.168.1.158:4000";
+// Points at the deployed backend (Render), so the app works over any
+// network -- Wi-Fi or cellular data -- not just your computer's LAN. The
+// free Render tier spins the server down after 15 minutes idle, so the
+// first request after a quiet period can take ~30-60s to wake it back up.
+export const API_BASE_URL = "https://phantom-racing.onrender.com";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
@@ -51,10 +50,15 @@ export const api = {
       `/api/segments/${segmentId}/ghost${runId ? `?runId=${runId}` : ""}`
     ),
 
-  submitRun: (segmentId: string, deviceId: string, trace: { lat: number; lng: number; t: number }[]) =>
+  submitRun: (
+    segmentId: string,
+    deviceId: string,
+    trace: { lat: number; lng: number; t: number }[],
+    maxSpeedKmh: number
+  ) =>
     request<SubmitRunResponse>(`/api/segments/${segmentId}/runs`, {
       method: "POST",
-      body: JSON.stringify({ deviceId, trace }),
+      body: JSON.stringify({ deviceId, trace, maxSpeedKmh }),
     }),
 
   getUserRuns: (deviceId: string) => request<any[]>(`/api/users/${deviceId}/runs`),

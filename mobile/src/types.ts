@@ -18,6 +18,7 @@ export type LeaderboardEntry = {
   displayName: string;
   durationMs: number;
   avgSpeedKmh: number;
+  maxSpeedKmh: number;
   recordedAt: string;
 };
 
@@ -38,6 +39,7 @@ export type SubmitRunResponse = {
   runId: string;
   durationMs: number;
   avgSpeedKmh: number;
+  maxSpeedKmh: number;
   rank: number;
   totalRuns: number;
   isNewRecord: boolean;

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Need for Speed: Streets",
+    "name": "Phantom Racing",
     "slug": "need-for-speed-streets",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -17,11 +17,21 @@
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"
-      ]
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyCfDZuCp2Dyy8wIgiY_KTxgrUYY70OM74Q"
+        }
+      }
     },
     "plugins": [
       "expo-asset",
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "6a3cef59-26bd-4283-a270-ccc957050ab5"
+      }
+    }
   }
 }

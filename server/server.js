@@ -200,6 +200,7 @@ route("GET", "/api/segments/:id/leaderboard", async ({ res, params }) => {
       displayName: state.users.find((u) => u.id === r.userId)?.displayName ?? "Unknown",
       durationMs: r.durationMs,
       avgSpeedKmh: r.avgSpeedKmh,
+      maxSpeedKmh: r.maxSpeedKmh ?? 0,
       recordedAt: r.recordedAt,
     }));
 
@@ -209,7 +210,7 @@ route("GET", "/api/segments/:id/leaderboard", async ({ res, params }) => {
 // Submit a completed run: validates the GPS trace actually covers the
 // segment, computes duration + rank, and stores it.
 route("POST", "/api/segments/:id/runs", async ({ res, params, body }) => {
-  const { deviceId, trace } = body;
+  const { deviceId, trace, maxSpeedKmh } = body;
   if (!deviceId || !Array.isArray(trace) || trace.length < 2) {
     return sendJson(res, 400, {
       error: "deviceId and a trace of at least 2 {lat,lng,t} points are required",
@@ -241,12 +242,21 @@ route("POST", "/api/segments/:id/runs", async ({ res, params, body }) => {
   }
   const avgSpeedKmh = (segment.lengthM / 1000) / (durationMs / 3_600_000);
 
+  // Client-reported top speed, from the phone's GPS speed sensor. Sanity
+  // checked (not just trusted) since GPS speed can spike from noise or a
+  // spoofed value: must be a finite, non-negative number, and clamped to a
+  // generous but real-world ceiling.
+  const rawMaxSpeed = Number(maxSpeedKmh);
+  const safeMaxSpeedKmh =
+    Number.isFinite(rawMaxSpeed) && rawMaxSpeed > 0 ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0;
+
   const run = {
     id: db.id("run"),
     segmentId: segment.id,
     userId: user.id,
     durationMs,
     avgSpeedKmh: Math.round(avgSpeedKmh * 10) / 10,
+    maxSpeedKmh: safeMaxSpeedKmh,
     trace: cleanTrace,
     recordedAt: new Date().toISOString(),
   };
@@ -262,6 +272,7 @@ route("POST", "/api/segments/:id/runs", async ({ res, params, body }) => {
     runId: run.id,
     durationMs: run.durationMs,
     avgSpeedKmh: run.avgSpeedKmh,
+    maxSpeedKmh: run.maxSpeedKmh,
     rank,
     totalRuns: allRuns.length,
     isNewRecord: rank === 1,
@@ -308,6 +319,7 @@ route("GET", "/api/users/:deviceId/runs", async ({ res, params }) => {
       segmentName: state.segments.find((s) => s.id === r.segmentId)?.name ?? "Unknown",
       durationMs: r.durationMs,
       avgSpeedKmh: r.avgSpeedKmh,
+      maxSpeedKmh: r.maxSpeedKmh ?? 0,
       recordedAt: r.recordedAt,
     }));
   sendJson(res, 200, runs);

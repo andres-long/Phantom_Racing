@@ -36,7 +36,9 @@ export default function LeaderboardScreen({ route }: Props) {
             <Text style={styles.rank}>#{item.rank}</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.name}>{item.displayName}</Text>
-              <Text style={styles.meta}>{item.avgSpeedKmh} km/h avg</Text>
+              <Text style={styles.meta}>
+                {item.avgSpeedKmh} km/h avg · {Math.round(item.maxSpeedKmh)} km/h top
+              </Text>
             </View>
             <Text style={styles.time}>{formatDuration(item.durationMs)}</Text>
           </View>

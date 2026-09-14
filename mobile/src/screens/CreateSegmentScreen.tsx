@@ -16,6 +16,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   const { user } = useUser();
   const [recording, setRecording] = useState(false);
   const [points, setPoints] = useState<LatLng[]>([]);
+  const [speedKmh, setSpeedKmh] = useState(0);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -35,11 +36,13 @@ export default function CreateSegmentScreen({ navigation }: Props) {
 
   const startRecording = async () => {
     setPoints([]);
+    setSpeedKmh(0);
     setRecording(true);
     subscriptionRef.current = await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 5 },
       (loc) => {
         setPoints((prev) => [...prev, { lat: loc.coords.latitude, lng: loc.coords.longitude }]);
+        setSpeedKmh(Math.max(0, (loc.coords.speed ?? 0) * 3.6));
       }
     );
   };
@@ -98,6 +101,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         <Text style={styles.hudText}>
           {recording ? `Recording... ${Math.round(polylineLength(points))}m` : "Not recording"}
         </Text>
+        {recording && <Text style={styles.speedText}>{Math.round(speedKmh)} km/h</Text>}
       </View>
 
       {!naming ? (
@@ -115,8 +119,9 @@ export default function CreateSegmentScreen({ navigation }: Props) {
             placeholderTextColor="#8e8e96"
             value={name}
             onChangeText={setName}
+            autoFocus
           />
-          <Pressable style={styles.button} onPress={submit} disabled={submitting}>
+          <Pressable style={styles.buttonInline} onPress={submit} disabled={submitting}>
             <Text style={styles.buttonText}>{submitting ? "Saving..." : "Save segment"}</Text>
           </Pressable>
         </View>
@@ -129,6 +134,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0f" },
   hud: { position: "absolute", top: 60, left: 20, right: 20, backgroundColor: "#000000aa", padding: 12, borderRadius: 12 },
   hudText: { color: "#fff", fontWeight: "600", textAlign: "center" },
+  speedText: { color: "#c7c7cf", fontSize: 13, textAlign: "center", marginTop: 4 },
   button: {
     position: "absolute",
     bottom: 30,
@@ -140,6 +146,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   buttonStop: { backgroundColor: "#444" },
+  buttonInline: {
+    backgroundColor: "#ff3b30",
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: "center",
+  },
   buttonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
   namingBox: { position: "absolute", bottom: 30, left: 20, right: 20 },
   input: {

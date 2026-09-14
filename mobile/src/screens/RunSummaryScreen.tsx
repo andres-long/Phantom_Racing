@@ -15,6 +15,7 @@ export default function RunSummaryScreen({ route, navigation }: Props) {
       {result.isNewRecord && <Text style={styles.record}>NEW RECORD</Text>}
       <Text style={styles.time}>{formatDuration(result.durationMs)}</Text>
       <Text style={styles.detail}>Avg speed: {result.avgSpeedKmh} km/h</Text>
+      <Text style={styles.detail}>Top speed: {Math.round(result.maxSpeedKmh)} km/h</Text>
       <Text style={styles.detail}>
         Rank #{result.rank} of {result.totalRuns}
       </Text>

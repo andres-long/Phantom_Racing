@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Need for Speed: Streets",
+    "slug": "need-for-speed-streets",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.example.needforspeedstreets",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app needs your location to time your runs along road segments."
+      }
+    },
+    "android": {
+      "package": "com.example.needforspeedstreets",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-font"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "need-for-speed-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MVP backend for real-life segment/ghost racing. JSON-file storage locally; MongoDB Atlas when MONGODB_URI is set (e.g. deployed).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/smoke-test.js"
+  },
+  "dependencies": {
+    "mongodb": "^6.9.0"
+  }
+}

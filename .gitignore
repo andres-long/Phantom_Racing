@@ -1,0 +1,11 @@
+mobile/node_modules/
+mobile/.expo/
+mobile/npm-debug.*
+server/node_modules/
+server/data/db.json
+node-installer.msi
+git-installer.exe
+*-output.txt
+*-log.txt
+*.log
+.env

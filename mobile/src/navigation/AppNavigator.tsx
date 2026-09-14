@@ -1,4 +1,5 @@
 import React from "react";
+import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
 import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
@@ -18,7 +19,31 @@ const navTheme = {
 };
 
 export default function AppNavigator() {
-  const { disclaimerAccepted } = useUser();
+  const { disclaimerAccepted, user, loading, error, retry } = useUser();
+
+  // Once past the disclaimer, don't let the person wander into screens that
+  // silently no-op without a registered user (e.g. Save segment doing
+  // nothing) -- show a connecting/retry state instead until the backend
+  // registration actually succeeds.
+  if (disclaimerAccepted && !user) {
+    if (loading) {
+      return (
+        <View style={styles.centered}>
+          <ActivityIndicator color="#ff3b30" size="large" />
+          <Text style={styles.connectingText}>Connecting to server...</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorTitle}>Couldn't connect</Text>
+        <Text style={styles.errorText}>{error || "Something went wrong reaching the server."}</Text>
+        <Pressable style={styles.retryButton} onPress={retry}>
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   // NOTE: `initialRouteName` is only read once, when the navigator first
   // mounts -- React Navigation does not react to it changing later. So we
@@ -49,3 +74,23 @@ export default function AppNavigator() {
     </NavigationContainer>
   );
 }
+
+const styles = StyleSheet.create({
+  centered: {
+    flex: 1,
+    backgroundColor: "#0b0b0f",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  connectingText: { color: "#8e8e96", marginTop: 16, fontSize: 14 },
+  errorTitle: { color: "#fff", fontSize: 20, fontWeight: "700", marginBottom: 8 },
+  errorText: { color: "#8e8e96", fontSize: 14, textAlign: "center", marginBottom: 24 },
+  retryButton: {
+    backgroundColor: "#ff3b30",
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+  },
+  retryButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+});

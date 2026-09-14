@@ -59,7 +59,10 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   };
 
   const submit = async () => {
-    if (!user) return;
+    if (!user) {
+      Alert.alert("Not connected", "Still connecting to the server -- please wait a moment and try again.");
+      return;
+    }
     if (!name.trim()) {
       Alert.alert("Name it", "Give this segment a name (e.g. \"Ridge Road westbound\").");
       return;

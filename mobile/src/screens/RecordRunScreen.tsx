@@ -74,7 +74,12 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     subscriptionRef.current = null;
     setRecording(false);
 
-    if (!user || !segment) return;
+    if (!user || !segment) {
+      Alert.alert("Not connected", "Lost connection to the server -- your run wasn't submitted.", [
+        { text: "OK", onPress: () => navigation.goBack() },
+      ]);
+      return;
+    }
     setSubmitting(true);
     try {
       const result = await api.submitRun(segmentId, user.deviceId, finalTrace, maxSpeedRef.current);

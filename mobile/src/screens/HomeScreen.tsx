@@ -35,8 +35,23 @@ export default function HomeScreen({ navigation }: Props) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Segments</Text>
-        <Text style={styles.subtitle}>{user ? `Racing as ${user.displayName}` : "Connecting..."}</Text>
+        <View style={styles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>Segments</Text>
+            <Pressable onPress={() => navigation.navigate("Username")} hitSlop={8}>
+              <Text style={styles.subtitle}>
+                {user ? `Racing as ${user.displayName} >` : "Connecting..."}
+              </Text>
+            </Pressable>
+          </View>
+          <Pressable
+            style={styles.settingsButton}
+            onPress={() => navigation.navigate("Welcome")}
+            hitSlop={8}
+          >
+            <Text style={styles.settingsButtonText}>How it works</Text>
+          </Pressable>
+        </View>
       </View>
 
       {error && (
@@ -98,8 +113,19 @@ export default function HomeScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0f" },
   header: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 10 },
+  headerRow: { flexDirection: "row", alignItems: "flex-start" },
   title: { color: "#fff", fontSize: 30, fontWeight: "700" },
   subtitle: { color: "#8e8e96", fontSize: 14, marginTop: 4 },
+  settingsButton: {
+    backgroundColor: "#17171d",
+    borderWidth: 1,
+    borderColor: "#33333d",
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 4,
+  },
+  settingsButtonText: { color: "#c7c7cf", fontSize: 12, fontWeight: "600" },
   errorBox: { margin: 16, padding: 14, backgroundColor: "#2a1414", borderRadius: 12 },
   errorText: { color: "#ff6b6b", fontWeight: "600" },
   errorHint: { color: "#c79a9a", fontSize: 12, marginTop: 6 },

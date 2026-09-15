@@ -7,8 +7,12 @@ type UserContextValue = {
   user: User | null;
   loading: boolean;
   error: string | null;
+  welcomeSeen: boolean;
   disclaimerAccepted: boolean;
+  usernameChosen: boolean;
+  completeWelcome: () => Promise<void>;
   acceptDisclaimer: () => Promise<void>;
+  completeUsername: (name: string) => Promise<void>;
   setDisplayName: (name: string) => Promise<void>;
   retry: () => Promise<void>;
 };
@@ -16,7 +20,9 @@ type UserContextValue = {
 const UserContext = createContext<UserContextValue | null>(null);
 
 const DEVICE_ID_KEY = "nfs.deviceId";
+const WELCOME_KEY = "nfs.welcomeSeen";
 const DISCLAIMER_KEY = "nfs.disclaimerAccepted";
+const USERNAME_KEY = "nfs.usernameChosen";
 
 function randomId(): string {
   // Good enough uniqueness for an MVP device identifier; not a real UUID lib
@@ -33,7 +39,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [welcomeSeen, setWelcomeSeen] = useState(false);
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
+  const [usernameChosen, setUsernameChosen] = useState(false);
 
   // Registers this device with the backend. Returns true on success. Used
   // both on startup and from a manual "Retry" button.
@@ -60,8 +68,12 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     (async () => {
+      const seenWelcome = (await AsyncStorage.getItem(WELCOME_KEY)) === "true";
+      setWelcomeSeen(seenWelcome);
       const accepted = (await AsyncStorage.getItem(DISCLAIMER_KEY)) === "true";
       setDisclaimerAccepted(accepted);
+      const chosenName = (await AsyncStorage.getItem(USERNAME_KEY)) === "true";
+      setUsernameChosen(chosenName);
 
       // Retry a handful of times with a short delay before giving up and
       // showing a manual retry screen -- covers the free-tier cold-start
@@ -81,6 +93,11 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setLoading(false);
   };
 
+  const completeWelcome = async () => {
+    await AsyncStorage.setItem(WELCOME_KEY, "true");
+    setWelcomeSeen(true);
+  };
+
   const acceptDisclaimer = async () => {
     await AsyncStorage.setItem(DISCLAIMER_KEY, "true");
     setDisclaimerAccepted(true);
@@ -92,9 +109,29 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setUser(updated);
   };
 
+  // First-launch name entry -- saves the name and, unlike a later rename
+  // from Home, also marks the gate as passed so the app doesn't ask again.
+  const completeUsername = async (name: string) => {
+    await setDisplayName(name);
+    await AsyncStorage.setItem(USERNAME_KEY, "true");
+    setUsernameChosen(true);
+  };
+
   return (
     <UserContext.Provider
-      value={{ user, loading, error, disclaimerAccepted, acceptDisclaimer, setDisplayName, retry }}
+      value={{
+        user,
+        loading,
+        error,
+        welcomeSeen,
+        disclaimerAccepted,
+        usernameChosen,
+        completeWelcome,
+        acceptDisclaimer,
+        completeUsername,
+        setDisplayName,
+        retry,
+      }}
     >
       {children}
     </UserContext.Provider>

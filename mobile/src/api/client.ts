@@ -1,10 +1,10 @@
 import {
   SegmentSummary,
+  CreateSegmentResponse,
   LeaderboardResponse,
   GhostProfileResponse,
   SubmitRunResponse,
   User,
-  LatLng,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -36,10 +36,19 @@ export const api = {
 
   getSegment: (segmentId: string) => request<SegmentSummary>(`/api/segments/${segmentId}`),
 
-  createSegment: (name: string, points: LatLng[], deviceId: string) =>
-    request<SegmentSummary>("/api/segments", {
+  // `trace` is the full recorded drive (with timestamps) that defines this
+  // segment -- the backend auto-submits it as the segment's first run, so
+  // the response includes that run alongside the segment (see
+  // CreateSegmentResponse).
+  createSegment: (
+    name: string,
+    trace: { lat: number; lng: number; t: number }[],
+    deviceId: string,
+    maxSpeedKmh: number
+  ) =>
+    request<CreateSegmentResponse>("/api/segments", {
       method: "POST",
-      body: JSON.stringify({ name, points, deviceId }),
+      body: JSON.stringify({ name, trace, deviceId, maxSpeedKmh }),
     }),
 
   getLeaderboard: (segmentId: string) =>

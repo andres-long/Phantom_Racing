@@ -65,6 +65,76 @@ function findUserByDevice(dbState, deviceId) {
 function isImplausibleRun(avgSpeedKmh, maxSpeedKmh) {
   return avgSpeedKmh > 300 || (maxSpeedKmh > 0 && avgSpeedKmh > maxSpeedKmh * 1.2);
 }
+
+// Validates a GPS trace against a segment and, if it checks out, times it
+// and stores it as a run. Shared by the dedicated "submit a run" endpoint
+// and by segment creation (the drive that just defined the segment is
+// itself a full lap of it, so it's auto-submitted as that segment's first
+// run). Returns { run, error } -- run is a plain submit-run-response object
+// on success, or null with `error` set to why it didn't count. The caller
+// decides whether that should fail the whole request (submitting a run:
+// yes) or just be reported alongside an otherwise-successful save
+// (creating a segment: no -- the segment is kept either way).
+function tryCreateRun(state, segment, user, cleanTrace, maxSpeedKmh) {
+  const segCumDist = geo.cumulativeDistances(segment.points);
+  const validation = geo.validateRunAgainstSegment(segment.points, segCumDist, cleanTrace);
+  if (!validation.valid) {
+    return { run: null, error: validation.reason };
+  }
+
+  const durationMs = cleanTrace[cleanTrace.length - 1].t - cleanTrace[0].t;
+  if (!(durationMs > 0)) {
+    return { run: null, error: "Invalid trace timestamps." };
+  }
+  const avgSpeedKmh = (segment.lengthM / 1000) / (durationMs / 3_600_000);
+
+  // Client-reported top speed, from the phone's GPS speed sensor. Sanity
+  // checked (not just trusted) since GPS speed can spike from noise or a
+  // spoofed value: must be a finite, non-negative number, and clamped to a
+  // generous but real-world ceiling.
+  const rawMaxSpeed = Number(maxSpeedKmh);
+  const safeMaxSpeedKmh =
+    Number.isFinite(rawMaxSpeed) && rawMaxSpeed > 0 ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0;
+
+  const roundedAvg = Math.round(avgSpeedKmh * 10) / 10;
+  if (isImplausibleRun(roundedAvg, safeMaxSpeedKmh)) {
+    return {
+      run: null,
+      error: "This run's average speed isn't physically plausible for this segment -- not counted.",
+    };
+  }
+
+  const run = {
+    id: db.id("run"),
+    segmentId: segment.id,
+    userId: user.id,
+    durationMs,
+    avgSpeedKmh: roundedAvg,
+    maxSpeedKmh: safeMaxSpeedKmh,
+    trace: cleanTrace,
+    recordedAt: new Date().toISOString(),
+  };
+  state.runs.push(run);
+
+  const allRuns = state.runs
+    .filter((r) => r.segmentId === segment.id)
+    .sort((a, b) => a.durationMs - b.durationMs);
+  const rank = allRuns.findIndex((r) => r.id === run.id) + 1;
+
+  return {
+    run: {
+      runId: run.id,
+      durationMs: run.durationMs,
+      avgSpeedKmh: run.avgSpeedKmh,
+      maxSpeedKmh: run.maxSpeedKmh,
+      rank,
+      totalRuns: allRuns.length,
+      isNewRecord: rank === 1,
+    },
+    error: null,
+  };
+}
+
 function segmentSummary(dbState, segment) {
   const runs = dbState.runs
     .filter((r) => r.segmentId === segment.id)
@@ -163,19 +233,28 @@ route("GET", "/api/segments", async ({ res }) => {
   );
 });
 
-// Create a new segment from a recorded polyline.
+// Create a new segment from a recorded polyline. The trace that defines the
+// segment is a full lap of it, so it's auto-submitted as that segment's
+// first timed run (see tryCreateRun) -- the response carries both the
+// segment and (if the trace was a valid, plausible run) that first run.
 route("POST", "/api/segments", async ({ res, body }) => {
-  const { name, points, deviceId } = body;
-  if (!name || !Array.isArray(points) || points.length < 2) {
+  const { name, trace, deviceId, maxSpeedKmh } = body;
+  if (!name || !Array.isArray(trace) || trace.length < 2) {
     return sendJson(res, 400, {
-      error: "name and at least 2 {lat,lng} points are required",
+      error: "name and a trace of at least 2 {lat,lng,t} points are required",
     });
   }
   const state = await db.load();
   const creator = findUserByDevice(state, deviceId);
   if (!creator) return sendJson(res, 400, { error: "Unknown deviceId; register the user first." });
 
-  const cleanPoints = points.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }));
+  const cleanTrace = trace.map((p) => ({
+    lat: Number(p.lat),
+    lng: Number(p.lng),
+    t: Number(p.t),
+  }));
+  const cleanPoints = cleanTrace.map((p) => ({ lat: p.lat, lng: p.lng }));
+
   const segment = {
     id: db.id("seg"),
     name,
@@ -185,8 +264,11 @@ route("POST", "/api/segments", async ({ res, body }) => {
     createdAt: new Date().toISOString(),
   };
   state.segments.push(segment);
+
+  const { run, error: runError } = tryCreateRun(state, segment, creator, cleanTrace, maxSpeedKmh);
+
   await db.save(state);
-  sendJson(res, 201, segmentSummary(state, segment));
+  sendJson(res, 201, { ...segmentSummary(state, segment), run, runError: run ? null : runError });
 });
 
 route("GET", "/api/segments/:id", async ({ res, params }) => {
@@ -241,59 +323,12 @@ route("POST", "/api/segments/:id/runs", async ({ res, params, body }) => {
     t: Number(p.t),
   }));
 
-  const segCumDist = geo.cumulativeDistances(segment.points);
-  const validation = geo.validateRunAgainstSegment(segment.points, segCumDist, cleanTrace);
-  if (!validation.valid) {
-    return sendJson(res, 422, { error: validation.reason });
+  const { run, error } = tryCreateRun(state, segment, user, cleanTrace, maxSpeedKmh);
+  if (!run) {
+    return sendJson(res, 422, { error });
   }
-
-  const durationMs = cleanTrace[cleanTrace.length - 1].t - cleanTrace[0].t;
-  if (!(durationMs > 0)) {
-    return sendJson(res, 422, { error: "Invalid trace timestamps." });
-  }
-  const avgSpeedKmh = (segment.lengthM / 1000) / (durationMs / 3_600_000);
-
-  // Client-reported top speed, from the phone's GPS speed sensor. Sanity
-  // checked (not just trusted) since GPS speed can spike from noise or a
-  // spoofed value: must be a finite, non-negative number, and clamped to a
-  // generous but real-world ceiling.
-  const rawMaxSpeed = Number(maxSpeedKmh);
-  const safeMaxSpeedKmh =
-    Number.isFinite(rawMaxSpeed) && rawMaxSpeed > 0 ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0;
-
-
-  if (isImplausibleRun(avgSpeedKmh, safeMaxSpeedKmh)) {
-    return sendJson(res, 422, {
-      error: "This run's average speed isn't physically plausible for this segment -- not counted.",
-    });
-  }
-  const run = {
-    id: db.id("run"),
-    segmentId: segment.id,
-    userId: user.id,
-    durationMs,
-    avgSpeedKmh: Math.round(avgSpeedKmh * 10) / 10,
-    maxSpeedKmh: safeMaxSpeedKmh,
-    trace: cleanTrace,
-    recordedAt: new Date().toISOString(),
-  };
-  state.runs.push(run);
   await db.save(state);
-
-  const allRuns = state.runs
-    .filter((r) => r.segmentId === segment.id)
-    .sort((a, b) => a.durationMs - b.durationMs);
-  const rank = allRuns.findIndex((r) => r.id === run.id) + 1;
-
-  sendJson(res, 201, {
-    runId: run.id,
-    durationMs: run.durationMs,
-    avgSpeedKmh: run.avgSpeedKmh,
-    maxSpeedKmh: run.maxSpeedKmh,
-    rank,
-    totalRuns: allRuns.length,
-    isNewRecord: rank === 1,
-  });
+  sendJson(res, 201, run);
 });
 
 // The current leaderboard leader's run, packaged as a "ghost profile" the

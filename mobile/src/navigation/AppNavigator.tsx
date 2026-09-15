@@ -4,7 +4,9 @@ import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
 import { useUser } from "../context/UserContext";
+import WelcomeScreen from "../screens/WelcomeScreen";
 import DisclaimerScreen from "../screens/DisclaimerScreen";
+import UsernameScreen from "../screens/UsernameScreen";
 import HomeScreen from "../screens/HomeScreen";
 import CreateSegmentScreen from "../screens/CreateSegmentScreen";
 import RecordRunScreen from "../screens/RecordRunScreen";
@@ -19,13 +21,13 @@ const navTheme = {
 };
 
 export default function AppNavigator() {
-  const { disclaimerAccepted, user, loading, error, retry } = useUser();
+  const { welcomeSeen, disclaimerAccepted, usernameChosen, user, loading, error, retry } = useUser();
 
-  // Once past the disclaimer, don't let the person wander into screens that
-  // silently no-op without a registered user (e.g. Save segment doing
-  // nothing) -- show a connecting/retry state instead until the backend
-  // registration actually succeeds.
-  if (disclaimerAccepted && !user) {
+  // Once past welcome + disclaimer, don't let the person wander into
+  // screens that silently no-op without a registered user (e.g. Save
+  // segment doing nothing) -- show a connecting/retry state instead until
+  // the backend registration actually succeeds.
+  if (welcomeSeen && disclaimerAccepted && !user) {
     if (loading) {
       return (
         <View style={styles.centered}>
@@ -47,22 +49,37 @@ export default function AppNavigator() {
 
   // NOTE: `initialRouteName` is only read once, when the navigator first
   // mounts -- React Navigation does not react to it changing later. So we
-  // can't just flip initialRouteName after acceptDisclaimer() runs; instead
-  // we swap which screens are registered (the standard React Navigation
+  // can't just flip initialRouteName after each gate passes; instead we
+  // swap which screens are registered (the standard React Navigation
   // "auth flow" pattern: https://reactnavigation.org/docs/auth-flow/).
   // When the set of screens changes, the navigator automatically resets to
-  // the first screen in the new set.
+  // the first screen in the new set. Onboarding order: Welcome (what this
+  // app is) -> Disclaimer (safety) -> Username (who you race as) -> Home.
   return (
     <NavigationContainer theme={navTheme}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {!disclaimerAccepted ? (
+        {!welcomeSeen ? (
+          <Stack.Screen name="Welcome" component={WelcomeScreen} />
+        ) : !disclaimerAccepted ? (
           <Stack.Screen name="Disclaimer" component={DisclaimerScreen} />
+        ) : !usernameChosen ? (
+          <Stack.Screen name="Username" component={UsernameScreen} />
         ) : (
           <>
             <Stack.Screen name="Home" component={HomeScreen} />
             <Stack.Screen name="CreateSegment" component={CreateSegmentScreen} />
             <Stack.Screen name="RecordRun" component={RecordRunScreen} />
             <Stack.Screen name="RunSummary" component={RunSummaryScreen} />
+            <Stack.Screen
+              name="Username"
+              component={UsernameScreen}
+              options={{ headerShown: true, title: "Change name" }}
+            />
+            <Stack.Screen
+              name="Welcome"
+              component={WelcomeScreen}
+              options={{ headerShown: true, title: "How it works" }}
+            />
             <Stack.Screen
               name="Leaderboard"
               component={LeaderboardScreen}

@@ -45,6 +45,16 @@ export type SubmitRunResponse = {
   isNewRecord: boolean;
 };
 
+// Response to creating a segment. The recording that defines a segment is
+// itself a full lap of it, so the backend auto-submits it as that
+// segment's first run -- `run` is that result, or null (with `runError`
+// explaining why) if the trace couldn't be counted as a run. The segment
+// itself is always saved either way.
+export type CreateSegmentResponse = SegmentSummary & {
+  run: SubmitRunResponse | null;
+  runError: string | null;
+};
+
 export type User = {
   id: string;
   deviceId: string;
@@ -54,7 +64,9 @@ export type User = {
 
 // Root navigator param list.
 export type RootStackParamList = {
+  Welcome: undefined;
   Disclaimer: undefined;
+  Username: undefined;
   Home: undefined;
   CreateSegment: undefined;
   RecordRun: { segmentId: string };

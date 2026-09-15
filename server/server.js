@@ -342,18 +342,6 @@ route("GET", "/api/users/:deviceId/runs", async ({ res, params }) => {
   sendJson(res, 200, runs);
 });
 
-// TEMPORARY one-time cleanup: removes any already-stored run that fails
-// the plausibility check above (e.g. the pre-fix GPS-mismatch bug).
-// Safe to call more than once; safe to delete once run.
-route("GET", "/api/admin/purge-implausible-runs", async ({ res }) => {
-  const state = await db.load();
-  const before = state.runs.length;
-  state.runs = state.runs.filter((r) => !isImplausibleRun(r.avgSpeedKmh, r.maxSpeedKmh ?? 0));
-  const removed = before - state.runs.length;
-  if (removed > 0) await db.save(state);
-  sendJson(res, 200, { removed });
-});
-
 const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {

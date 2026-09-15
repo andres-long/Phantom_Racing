@@ -140,7 +140,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           }
 
           // Auto-finish once we're essentially at the end of the segment.
-          if (totalLength > 0 && distanceAlongM >= totalLength * 0.98) {
+      if (totalLength > 0 && distanceAlongM >= totalLength * 0.98 && elapsed >= 3000 && next.length >= 3) {
             finishRun(next);
           }
           return next;

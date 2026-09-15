@@ -54,6 +54,17 @@ function findUserByDevice(dbState, deviceId) {
   return dbState.users.find((u) => u.deviceId === deviceId);
 }
 
+
+// A run whose average speed is not physically plausible -- either an
+// absurd absolute speed, or higher than the phone's own recorded top
+// speed for that same run (average can never exceed max) -- almost
+// certainly means the GPS trace was mismatched onto the segment (e.g.
+// the live position momentarily projected near the segment's far end)
+// rather than a real drive. Used both to reject new submissions and to
+// clean out any that already slipped through.
+function isImplausibleRun(avgSpeedKmh, maxSpeedKmh) {
+  return avgSpeedKmh > 300 || (maxSpeedKmh > 0 && avgSpeedKmh > maxSpeedKmh * 1.2);
+}
 function segmentSummary(dbState, segment) {
   const runs = dbState.runs
     .filter((r) => r.segmentId === segment.id)
@@ -250,6 +261,12 @@ route("POST", "/api/segments/:id/runs", async ({ res, params, body }) => {
   const safeMaxSpeedKmh =
     Number.isFinite(rawMaxSpeed) && rawMaxSpeed > 0 ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0;
 
+
+  if (isImplausibleRun(avgSpeedKmh, safeMaxSpeedKmh)) {
+    return sendJson(res, 422, {
+      error: "This run's average speed isn't physically plausible for this segment -- not counted.",
+    });
+  }
   const run = {
     id: db.id("run"),
     segmentId: segment.id,
@@ -323,6 +340,18 @@ route("GET", "/api/users/:deviceId/runs", async ({ res, params }) => {
       recordedAt: r.recordedAt,
     }));
   sendJson(res, 200, runs);
+});
+
+// TEMPORARY one-time cleanup: removes any already-stored run that fails
+// the plausibility check above (e.g. the pre-fix GPS-mismatch bug).
+// Safe to call more than once; safe to delete once run.
+route("GET", "/api/admin/purge-implausible-runs", async ({ res }) => {
+  const state = await db.load();
+  const before = state.runs.length;
+  state.runs = state.runs.filter((r) => !isImplausibleRun(r.avgSpeedKmh, r.maxSpeedKmh ?? 0));
+  const removed = before - state.runs.length;
+  if (removed > 0) await db.save(state);
+  sendJson(res, 200, { removed });
 });
 
 const server = http.createServer((req, res) => {

@@ -140,12 +140,20 @@ export default function HomeScreen({ navigation }: Props) {
                 coordinates={s.points.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
                 strokeColor={isSelected ? "#ff3b30" : "#3b82f6"}
                 strokeWidth={isSelected ? 6 : 4}
+                tappable
+                onPress={() => setSelectedId(s.id)}
               />
               <Marker
                 coordinate={{ latitude: mid.lat, longitude: mid.lng }}
-                pinColor={isSelected ? "#ff3b30" : "#3b82f6"}
+                anchor={{ x: 0.5, y: 0.5 }}
                 onPress={() => setSelectedId(s.id)}
-              />
+              >
+                <View style={[styles.trackLabel, isSelected && styles.trackLabelSelected]}>
+                  <Text style={styles.trackLabelText} numberOfLines={1}>
+                    {s.name}
+                  </Text>
+                </View>
+              </Marker>
             </React.Fragment>
           );
         })}
@@ -265,6 +273,20 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   errorText: { color: "#ff6b6b", fontSize: 12, fontWeight: "600" },
+  trackLabel: {
+    backgroundColor: "#000000dd",
+    borderRadius: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderWidth: 1.5,
+    borderColor: "#3b82f6",
+    maxWidth: 150,
+  },
+  trackLabelSelected: {
+    backgroundColor: "#ff3b30",
+    borderColor: "#ff3b30",
+  },
+  trackLabelText: { color: "#fff", fontSize: 11, fontWeight: "700" },
   recenterButton: {
     position: "absolute",
     right: 16,

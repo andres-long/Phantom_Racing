@@ -68,6 +68,7 @@ export type RootStackParamList = {
   Disclaimer: undefined;
   Username: undefined;
   Home: undefined;
+  AllSegments: undefined;
   CreateSegment: undefined;
   RecordRun: { segmentId: string };
   RunSummary: { result: SubmitRunResponse; segmentName: string; segmentId: string };

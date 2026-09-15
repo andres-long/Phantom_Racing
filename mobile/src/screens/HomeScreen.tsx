@@ -1,20 +1,48 @@
-import React, { useCallback, useState } from "react";
-import { View, Text, StyleSheet, FlatList, Pressable, RefreshControl, ActivityIndicator } from "react-native";
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from "react-native-maps";
+import * as Location from "expo-location";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList, SegmentSummary } from "../types";
+import { RootStackParamList, SegmentSummary, LatLng } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
+import { cumulativeDistances, projectOntoPolyline, pointAtDistance } from "../utils/geo";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
+// How close a segment's nearest point has to be to your current position to
+// count as "nearby" and show up on the live map. 5km covers "the road I'm
+// about to drive" without cluttering the map with the whole city.
+const NEARBY_RADIUS_M = 5000;
+
+const FALLBACK_REGION: Region = {
+  latitude: 14.6349,
+  longitude: -90.5069,
+  latitudeDelta: 0.05,
+  longitudeDelta: 0.05,
+};
+
+type NearbySegment = SegmentSummary & { distanceM: number };
+
+// The home screen: mostly map. You see yourself (the blue dot), your live
+// speed, and any recorded tracks close enough to be worth racing right now.
+// Browsing the full list of every track ever recorded lives one tap away
+// (the "All tracks" button), since that's a secondary, occasional action.
 export default function HomeScreen({ navigation }: Props) {
   const { user } = useUser();
+  const mapRef = useRef<MapView | null>(null);
+  const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
+
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
+  const [userPos, setUserPos] = useState<LatLng | null>(null);
+  const [speedKmh, setSpeedKmh] = useState(0);
+  const [hasCentered, setHasCentered] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const loadSegments = useCallback(async () => {
     try {
       setError(null);
       const data = await api.listSegments();
@@ -26,81 +54,172 @@ export default function HomeScreen({ navigation }: Props) {
     }
   }, []);
 
+  // Track position + speed only while this screen is actually on screen --
+  // Home stays mounted underneath every pushed screen in the stack, so a
+  // plain mount-effect would keep GPS running (and draining battery) the
+  // whole time you're recording a run or looking at a leaderboard.
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load])
+      loadSegments();
+      let cancelled = false;
+
+      (async () => {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted" || cancelled) return;
+        subscriptionRef.current = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 5 },
+          (loc) => {
+            const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+            setUserPos(pos);
+            setSpeedKmh(Math.max(0, (loc.coords.speed ?? 0) * 3.6));
+          }
+        );
+      })();
+
+      return () => {
+        cancelled = true;
+        subscriptionRef.current?.remove();
+        subscriptionRef.current = null;
+      };
+    }, [loadSegments])
   );
+
+  // Center the map on the user once, the first time a GPS fix comes in --
+  // after that, leave the map alone so panning/zooming to look around
+  // doesn't get fought by auto-recentering on every position update.
+  if (userPos && !hasCentered) {
+    setHasCentered(true);
+    mapRef.current?.animateToRegion(
+      { latitude: userPos.lat, longitude: userPos.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+      500
+    );
+  }
+
+  const nearby: NearbySegment[] = useMemo(() => {
+    if (!userPos) return [];
+    return segments
+      .map((s) => {
+        if (s.points.length < 2) return { ...s, distanceM: Infinity };
+        const cumDist = cumulativeDistances(s.points);
+        const { lateralDistanceM } = projectOntoPolyline(s.points, cumDist, userPos);
+        return { ...s, distanceM: lateralDistanceM };
+      })
+      .filter((s) => s.distanceM <= NEARBY_RADIUS_M)
+      .sort((a, b) => a.distanceM - b.distanceM);
+  }, [segments, userPos]);
+
+  const selected = nearby.find((s) => s.id === selectedId) ?? null;
+
+  const recenter = () => {
+    if (!userPos) return;
+    mapRef.current?.animateToRegion(
+      { latitude: userPos.lat, longitude: userPos.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+      400
+    );
+  };
+
+  const formatDistance = (m: number) => (m < 1000 ? `${Math.round(m)}m away` : `${(m / 1000).toFixed(1)}km away`);
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.headerRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>Segments</Text>
-            <Pressable onPress={() => navigation.navigate("Username")} hitSlop={8}>
-              <Text style={styles.subtitle}>
-                {user ? `Racing as ${user.displayName} >` : "Connecting..."}
-              </Text>
-            </Pressable>
-          </View>
-          <Pressable
-            style={styles.settingsButton}
-            onPress={() => navigation.navigate("Welcome")}
-            hitSlop={8}
-          >
-            <Text style={styles.settingsButtonText}>How it works</Text>
-          </Pressable>
-        </View>
+      <MapView
+        ref={mapRef}
+        style={StyleSheet.absoluteFill}
+        provider={PROVIDER_GOOGLE}
+        showsUserLocation
+        initialRegion={FALLBACK_REGION}
+        onPress={() => setSelectedId(null)}
+      >
+        {nearby.map((s) => {
+          const cumDist = cumulativeDistances(s.points);
+          const mid = pointAtDistance(s.points, cumDist, cumDist[cumDist.length - 1] / 2);
+          const isSelected = s.id === selectedId;
+          return (
+            <React.Fragment key={s.id}>
+              <Polyline
+                coordinates={s.points.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+                strokeColor={isSelected ? "#ff3b30" : "#3b82f6"}
+                strokeWidth={isSelected ? 6 : 4}
+              />
+              <Marker
+                coordinate={{ latitude: mid.lat, longitude: mid.lng }}
+                pinColor={isSelected ? "#ff3b30" : "#3b82f6"}
+                onPress={() => setSelectedId(s.id)}
+              />
+            </React.Fragment>
+          );
+        })}
+      </MapView>
+
+      <View style={styles.topBar}>
+        <Pressable onPress={() => navigation.navigate("Username")} hitSlop={8} style={styles.topBarLeft}>
+          <Text style={styles.topBarName} numberOfLines={1}>
+            {user ? `${user.displayName} >` : "Connecting..."}
+          </Text>
+        </Pressable>
+        <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("AllSegments")}>
+          <Text style={styles.topBarButtonText}>All tracks</Text>
+        </Pressable>
+        <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("Welcome")}>
+          <Text style={styles.topBarButtonText}>How it works</Text>
+        </Pressable>
       </View>
 
       {error && (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
-          <Text style={styles.errorHint}>
-            Check API_BASE_URL in src/api/client.ts -- it needs to point at your computer's LAN
-            IP when testing on a physical phone.
-          </Text>
         </View>
       )}
 
-      {loading ? (
-        <ActivityIndicator style={{ marginTop: 40 }} color="#ff3b30" />
-      ) : (
-        <FlatList
-          data={segments}
-          keyExtractor={(s) => s.id}
-          refreshControl={<RefreshControl refreshing={false} onRefresh={load} tintColor="#fff" />}
-          contentContainerStyle={{ padding: 16 }}
-          ListEmptyComponent={
-            <Text style={styles.empty}>No segments yet. Record one from a drive you already do.</Text>
-          }
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>{item.name}</Text>
-              <Text style={styles.cardMeta}>
-                {(item.lengthM / 1000).toFixed(2)} km
-                {item.bestTimeMs != null
-                  ? ` -- best ${(item.bestTimeMs / 1000).toFixed(1)}s by ${item.bestTimeUser}`
-                  : " -- no runs yet, be the first"}
-              </Text>
-              <View style={styles.cardActions}>
-                <Pressable
-                  style={[styles.smallButton, styles.primaryButton]}
-                  onPress={() => navigation.navigate("RecordRun", { segmentId: item.id })}
-                >
-                  <Text style={styles.smallButtonText}>Race it</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.smallButton}
-                  onPress={() => navigation.navigate("Leaderboard", { segmentId: item.id, segmentName: item.name })}
-                >
-                  <Text style={styles.smallButtonText}>Leaderboard</Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
-        />
+      <Pressable style={styles.recenterButton} onPress={recenter}>
+        <Text style={styles.recenterIcon}>o</Text>
+      </Pressable>
+
+      <View style={styles.speedHud}>
+        {loading ? (
+          <ActivityIndicator color="#ff3b30" />
+        ) : (
+          <>
+            <Text style={styles.speedValue}>{Math.round(speedKmh)}</Text>
+            <Text style={styles.speedUnit}>km/h</Text>
+          </>
+        )}
+        <Text style={styles.nearbyCount}>
+          {nearby.length === 0
+            ? "No tracks nearby yet"
+            : `${nearby.length} track${nearby.length === 1 ? "" : "s"} nearby`}
+        </Text>
+      </View>
+
+      {selected && (
+        <View style={styles.card}>
+          <Pressable style={styles.cardClose} onPress={() => setSelectedId(null)} hitSlop={8}>
+            <Text style={styles.cardCloseText}>x</Text>
+          </Pressable>
+          <Text style={styles.cardTitle}>{selected.name}</Text>
+          <Text style={styles.cardMeta}>
+            {formatDistance(selected.distanceM)} -- {(selected.lengthM / 1000).toFixed(2)} km
+          </Text>
+          <Text style={styles.cardMeta}>
+            {selected.bestTimeMs != null
+              ? `Best ${(selected.bestTimeMs / 1000).toFixed(1)}s by ${selected.bestTimeUser}`
+              : "No runs yet -- be the first"}
+          </Text>
+          <View style={styles.cardActions}>
+            <Pressable
+              style={[styles.cardButton, styles.cardButtonPrimary]}
+              onPress={() => navigation.navigate("RecordRun", { segmentId: selected.id })}
+            >
+              <Text style={styles.cardButtonText}>Race it</Text>
+            </Pressable>
+            <Pressable
+              style={styles.cardButton}
+              onPress={() => navigation.navigate("Leaderboard", { segmentId: selected.id, segmentName: selected.name })}
+            >
+              <Text style={styles.cardButtonText}>Leaderboard</Text>
+            </Pressable>
+          </View>
+        </View>
       )}
 
       <Pressable style={styles.fab} onPress={() => navigation.navigate("CreateSegment")}>
@@ -112,31 +231,85 @@ export default function HomeScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0f" },
-  header: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 10 },
-  headerRow: { flexDirection: "row", alignItems: "flex-start" },
-  title: { color: "#fff", fontSize: 30, fontWeight: "700" },
-  subtitle: { color: "#8e8e96", fontSize: 14, marginTop: 4 },
-  settingsButton: {
-    backgroundColor: "#17171d",
-    borderWidth: 1,
-    borderColor: "#33333d",
+  topBar: {
+    position: "absolute",
+    top: 50,
+    left: 16,
+    right: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  topBarLeft: {
+    flex: 1,
+    backgroundColor: "#000000cc",
     borderRadius: 10,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    marginTop: 4,
   },
-  settingsButtonText: { color: "#c7c7cf", fontSize: 12, fontWeight: "600" },
-  errorBox: { margin: 16, padding: 14, backgroundColor: "#2a1414", borderRadius: 12 },
-  errorText: { color: "#ff6b6b", fontWeight: "600" },
-  errorHint: { color: "#c79a9a", fontSize: 12, marginTop: 6 },
-  empty: { color: "#8e8e96", textAlign: "center", marginTop: 40 },
-  card: { backgroundColor: "#17171d", borderRadius: 16, padding: 16, marginBottom: 12 },
-  cardTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  cardMeta: { color: "#9c9ca6", fontSize: 13, marginTop: 4 },
+  topBarName: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  topBarButton: {
+    backgroundColor: "#000000cc",
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  topBarButtonText: { color: "#c7c7cf", fontSize: 12, fontWeight: "600" },
+  errorBox: {
+    position: "absolute",
+    top: 96,
+    left: 16,
+    right: 16,
+    backgroundColor: "#2a1414ee",
+    borderRadius: 10,
+    padding: 10,
+  },
+  errorText: { color: "#ff6b6b", fontSize: 12, fontWeight: "600" },
+  recenterButton: {
+    position: "absolute",
+    right: 16,
+    bottom: 170,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#000000cc",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recenterIcon: { color: "#fff", fontSize: 18, fontWeight: "800" },
+  speedHud: {
+    position: "absolute",
+    left: 16,
+    bottom: 100,
+    backgroundColor: "#000000cc",
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    alignItems: "center",
+    minWidth: 110,
+  },
+  speedValue: { color: "#fff", fontSize: 34, fontWeight: "800", lineHeight: 38 },
+  speedUnit: { color: "#8e8e96", fontSize: 12, marginBottom: 4 },
+  nearbyCount: { color: "#c7c7cf", fontSize: 11, marginTop: 4, textAlign: "center" },
+  card: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    bottom: 100,
+    backgroundColor: "#17171dee",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#33333d",
+  },
+  cardClose: { position: "absolute", top: 10, right: 12, padding: 4 },
+  cardCloseText: { color: "#8e8e96", fontSize: 16, fontWeight: "700" },
+  cardTitle: { color: "#fff", fontSize: 18, fontWeight: "700", marginBottom: 4, paddingRight: 24 },
+  cardMeta: { color: "#9c9ca6", fontSize: 13, marginTop: 2 },
   cardActions: { flexDirection: "row", marginTop: 12, gap: 10 },
-  smallButton: { backgroundColor: "#26262f", paddingVertical: 8, paddingHorizontal: 14, borderRadius: 10 },
-  primaryButton: { backgroundColor: "#ff3b30" },
-  smallButtonText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  cardButton: { flex: 1, backgroundColor: "#26262f", paddingVertical: 10, borderRadius: 10, alignItems: "center" },
+  cardButtonPrimary: { backgroundColor: "#ff3b30" },
+  cardButtonText: { color: "#fff", fontWeight: "600", fontSize: 13 },
   fab: {
     position: "absolute",
     bottom: 24,

@@ -8,6 +8,7 @@ import WelcomeScreen from "../screens/WelcomeScreen";
 import DisclaimerScreen from "../screens/DisclaimerScreen";
 import UsernameScreen from "../screens/UsernameScreen";
 import HomeScreen from "../screens/HomeScreen";
+import AllSegmentsScreen from "../screens/AllSegmentsScreen";
 import CreateSegmentScreen from "../screens/CreateSegmentScreen";
 import RecordRunScreen from "../screens/RecordRunScreen";
 import RunSummaryScreen from "../screens/RunSummaryScreen";
@@ -67,6 +68,11 @@ export default function AppNavigator() {
         ) : (
           <>
             <Stack.Screen name="Home" component={HomeScreen} />
+            <Stack.Screen
+              name="AllSegments"
+              component={AllSegmentsScreen}
+              options={{ headerShown: true, title: "All tracks" }}
+            />
             <Stack.Screen name="CreateSegment" component={CreateSegmentScreen} />
             <Stack.Screen name="RecordRun" component={RecordRunScreen} />
             <Stack.Screen name="RunSummary" component={RunSummaryScreen} />

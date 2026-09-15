@@ -28,7 +28,11 @@ export default function UsernameScreen({ navigation }: Props) {
         await completeUsername(trimmed);
       } else {
         await setDisplayName(trimmed);
-        navigation.goBack();
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+        } else {
+          navigation.navigate("Home");
+        }
       }
     } catch (e: any) {
       Alert.alert("Couldn't save name", e.message || "Unknown error");

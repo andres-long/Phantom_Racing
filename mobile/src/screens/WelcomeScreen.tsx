@@ -22,7 +22,11 @@ export default function WelcomeScreen({ navigation }: Props) {
     if (isFirstLaunch) {
       await completeWelcome();
     } else {
-      navigation.goBack();
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        navigation.navigate("Home");
+      }
     }
   };
 

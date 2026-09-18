@@ -10,6 +10,7 @@ import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { cumulativeDistances, projectOntoPolyline, pointAtDistance, haversine } from "../utils/geo";
 import { colors, fonts, panelStyle } from "../theme";
+import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
@@ -167,6 +168,7 @@ export default function HomeScreen({ navigation }: Props) {
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
+        customMapStyle={tronMapStyle}
         showsUserLocation
         initialRegion={FALLBACK_REGION}
         onPress={() => setSelectedId(null)}

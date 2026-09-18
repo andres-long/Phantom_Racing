@@ -16,6 +16,7 @@ import {
   formatDuration,
 } from "../utils/geo";
 import { colors, fonts, panelStyle } from "../theme";
+import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
@@ -217,6 +218,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
+        customMapStyle={tronMapStyle}
         showsUserLocation
         initialRegion={{
           latitude: segment.points[0].lat,

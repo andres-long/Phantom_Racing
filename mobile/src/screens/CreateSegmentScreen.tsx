@@ -9,6 +9,7 @@ import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { polylineLength } from "../utils/geo";
 import { colors, fonts, panelStyle } from "../theme";
+import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
@@ -121,6 +122,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
+        customMapStyle={tronMapStyle}
         showsUserLocation
         initialRegion={{
           latitude: trace[0]?.lat ?? 14.6349,

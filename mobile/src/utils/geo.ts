@@ -145,6 +145,43 @@ export function distanceAtElapsed(profile: GhostSample[], elapsedMs: number): nu
   return last.distanceAlongM;
 }
 
+/**
+ * Projects a polyline into flat local-meter (x, y) coordinates relative to
+ * its first point -- x = east/west, y = north/south. Good enough over the
+ * length of a single race segment (a few km at most); not meant for
+ * anything that needs to handle the poles or the antimeridian.
+ */
+export function toLocalXY(points: LatLng[]): { x: number; y: number }[] {
+  if (points.length === 0) return [];
+  const origin = points[0];
+  const latRad = toRad(origin.lat);
+  const mPerDegLat = 111320;
+  const mPerDegLng = 111320 * Math.cos(latRad);
+  return points.map((p) => ({
+    x: (p.lng - origin.lng) * mPerDegLng,
+    y: (p.lat - origin.lat) * mPerDegLat,
+  }));
+}
+
+/**
+ * Reduces a polyline to `samples` points evenly spaced by distance along
+ * the route (not by raw GPS-sample density, which varies a lot). Used for
+ * cheap track-shape previews so a 20-minute, several-thousand-point
+ * recording doesn't turn into several thousand rendered line segments.
+ */
+export function resamplePolyline(points: LatLng[], samples: number): LatLng[] {
+  if (points.length <= samples) return points;
+  const cumDist = cumulativeDistances(points);
+  const total = cumDist[cumDist.length - 1];
+  if (total === 0) return [points[0]];
+  const result: LatLng[] = [];
+  for (let i = 0; i < samples; i++) {
+    const d = (total * i) / (samples - 1);
+    result.push(pointAtDistance(points, cumDist, d));
+  }
+  return result;
+}
+
 export function formatDuration(ms: number): string {
   const sign = ms < 0 ? "-" : "";
   const abs = Math.abs(ms);

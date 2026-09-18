@@ -6,6 +6,7 @@ import { RootStackParamList, SegmentSummary } from "../types";
 import { api } from "../api/client";
 import { colors, fonts, panelStyle } from "../theme";
 import NeonButton from "../components/NeonButton";
+import TrackPreview from "../components/TrackPreview";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AllSegments">;
 
@@ -70,6 +71,7 @@ export default function AllSegmentsScreen({ navigation }: Props) {
         renderItem={({ item }) => (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>{item.name}</Text>
+            <TrackPreview points={item.points} />
             <Text style={styles.cardMeta}>
               {(item.lengthM / 1000).toFixed(2)} km -- {item.runCount} run{item.runCount === 1 ? "" : "s"}
             </Text>

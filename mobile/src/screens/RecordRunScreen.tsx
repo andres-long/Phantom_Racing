@@ -36,6 +36,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const [progress, setProgress] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
+  const mapRef = useRef<MapView | null>(null);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const cumDistRef = useRef<number[]>([]);
   const startTimeRef = useRef<number>(0);
@@ -118,6 +119,16 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           t: Date.now(),
         };
         setMyPos(point);
+        // This watcher only runs while a run is actively being recorded (it's
+        // created in startRun and torn down in finishRun), so it's safe to
+        // just always keep the map centered on you here -- no separate
+        // "recording" check needed. Without this the map stayed frozen on
+        // wherever it opened, and your position marker drove itself off
+        // screen within a few seconds.
+        mapRef.current?.animateToRegion(
+          { latitude: point.lat, longitude: point.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
+          500
+        );
         const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
         setSpeedKmh(currentSpeedKmh);
         if (currentSpeedKmh > maxSpeedRef.current) {
@@ -199,6 +210,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         showsUserLocation

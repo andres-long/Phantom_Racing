@@ -44,10 +44,18 @@ export default function HomeScreen({ navigation }: Props) {
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
   const [userPos, setUserPos] = useState<LatLng | null>(null);
   const [speedKmh, setSpeedKmh] = useState(0);
-  const [hasCentered, setHasCentered] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Whether the map should keep recentering on you as you move. On by
+  // default (that's the whole point of this fix -- your position marker
+  // used to drift out of view within a few seconds of driving). Turned off
+  // the moment you drag the map yourself (onPanDrag, below) so looking
+  // around isn't fought every second by an auto-recenter; the recenter
+  // button turns it back on. A ref, not state, because it's read from
+  // inside the location-watcher closure set up in useFocusEffect.
+  const followRef = useRef(true);
 
   const loadSegments = useCallback(async () => {
     try {
@@ -82,6 +90,13 @@ export default function HomeScreen({ navigation }: Props) {
             const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
             setSpeedKmh(currentSpeedKmh);
 
+            if (followRef.current) {
+              mapRef.current?.animateToRegion(
+                { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+                500
+              );
+            }
+
             // Guarded to fire at most once per visit to this screen, so it
             // can't re-trigger every second while sitting still right at a
             // start line -- only an actual approach at driving speed counts.
@@ -105,17 +120,6 @@ export default function HomeScreen({ navigation }: Props) {
       };
     }, [loadSegments, navigation])
   );
-
-  // Center the map on the user once, the first time a GPS fix comes in --
-  // after that, leave the map alone so panning/zooming to look around
-  // doesn't get fought by auto-recentering on every position update.
-  if (userPos && !hasCentered) {
-    setHasCentered(true);
-    mapRef.current?.animateToRegion(
-      { latitude: userPos.lat, longitude: userPos.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
-      500
-    );
-  }
 
   const nearby: NearbySegment[] = useMemo(() => {
     if (!userPos) return [];
@@ -144,6 +148,7 @@ export default function HomeScreen({ navigation }: Props) {
 
   const recenter = () => {
     if (!userPos) return;
+    followRef.current = true;
     mapRef.current?.animateToRegion(
       { latitude: userPos.lat, longitude: userPos.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
       400
@@ -161,6 +166,9 @@ export default function HomeScreen({ navigation }: Props) {
         showsUserLocation
         initialRegion={FALLBACK_REGION}
         onPress={() => setSelectedId(null)}
+        onPanDrag={() => {
+          followRef.current = false;
+        }}
       >
         {nearby.map((s) => {
           const cumDist = cumulativeDistances(s.points);

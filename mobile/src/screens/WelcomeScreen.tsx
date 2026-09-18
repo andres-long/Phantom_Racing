@@ -1,8 +1,11 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
+import { View, Text, StyleSheet, ScrollView } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
 import { useUser } from "../context/UserContext";
+import { colors, fonts } from "../theme";
+import GridBackground from "../components/GridBackground";
+import NeonButton from "../components/NeonButton";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Welcome">;
 
@@ -32,8 +35,9 @@ export default function WelcomeScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
+      <GridBackground />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>Phantom Racing</Text>
+        <Text style={styles.title}>PHANTOM RACING</Text>
         <Text style={styles.tagline}>Need for Speed, but it's the road you actually drive.</Text>
 
         <View style={styles.step}>
@@ -82,50 +86,49 @@ export default function WelcomeScreen({ navigation }: Props) {
           </View>
         </View>
       </ScrollView>
-      <Pressable style={styles.button} onPress={onContinue}>
-        <Text style={styles.buttonText}>{isFirstLaunch ? "Let's go" : "Got it"}</Text>
-      </Pressable>
+      <NeonButton label={isFirstLaunch ? "LET'S GO" : "GOT IT"} onPress={onContinue} style={styles.button} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b0b0f", padding: 20, justifyContent: "space-between" },
+  container: { flex: 1, backgroundColor: colors.bg, padding: 20, justifyContent: "space-between" },
   scroll: { paddingTop: 60, paddingBottom: 20 },
-  title: { color: "#fff", fontSize: 30, fontWeight: "800" },
-  tagline: { color: "#8e8e96", fontSize: 15, marginTop: 6, marginBottom: 28 },
+  title: { color: colors.textPrimary, fontFamily: fonts.display, fontSize: 26, letterSpacing: 2 },
+  tagline: { color: colors.textSecondary, fontSize: 15, marginTop: 10, marginBottom: 28 },
   step: { flexDirection: "row", marginBottom: 22 },
   stepNumber: {
-    color: "#ff3b30",
-    fontSize: 15,
-    fontWeight: "800",
+    color: colors.cyan,
+    fontFamily: fonts.heading,
+    fontSize: 14,
     width: 28,
     height: 28,
-    borderRadius: 14,
+    borderRadius: 4,
     borderWidth: 1.5,
-    borderColor: "#ff3b30",
+    borderColor: colors.cyan,
+    backgroundColor: colors.cyanDim,
     textAlign: "center",
     lineHeight: 25,
     marginRight: 14,
     overflow: "hidden",
   },
   stepWarn: {
-    color: "#ffd60a",
-    fontSize: 15,
-    fontWeight: "800",
+    color: colors.gold,
+    fontFamily: fonts.heading,
+    fontSize: 14,
     width: 28,
     height: 28,
-    borderRadius: 14,
+    borderRadius: 4,
     borderWidth: 1.5,
-    borderColor: "#ffd60a",
+    borderColor: colors.gold,
+    backgroundColor: "rgba(255, 207, 61, 0.12)",
     textAlign: "center",
     lineHeight: 25,
     marginRight: 14,
     overflow: "hidden",
   },
   stepBody: { flex: 1 },
-  stepTitle: { color: "#fff", fontSize: 16, fontWeight: "700", marginBottom: 4 },
-  stepText: { color: "#c7c7cf", fontSize: 14, lineHeight: 20 },
-  button: { backgroundColor: "#ff3b30", borderRadius: 14, paddingVertical: 16, alignItems: "center", marginBottom: 20 },
-  buttonText: { color: "#fff", fontSize: 17, fontWeight: "700" },
+  stepTitle: { color: colors.textPrimary, fontSize: 16, fontWeight: "700", marginBottom: 4 },
+  stepText: { color: colors.textSecondary, fontSize: 14, lineHeight: 20 },
+  button: { marginBottom: 20 },
 });

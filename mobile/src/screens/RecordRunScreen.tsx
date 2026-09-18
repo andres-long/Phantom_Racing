@@ -14,6 +14,8 @@ import {
   pointAtDistance,
   formatDuration,
 } from "../utils/geo";
+import { colors, fonts, panelStyle } from "../theme";
+import NeonButton from "../components/NeonButton";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
 type TracePoint = LatLng & { t: number };
@@ -197,7 +199,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   if (loading || !segment) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color="#ff3b30" />
+        <ActivityIndicator color={colors.cyan} />
       </View>
     );
   }
@@ -223,14 +225,14 @@ export default function RecordRunScreen({ route, navigation }: Props) {
       >
         <Polyline
           coordinates={segment.points.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
-          strokeColor="#3b82f6"
+          strokeColor={colors.cyan}
           strokeWidth={4}
         />
         {ghostMarker && (
           <Marker
             coordinate={{ latitude: ghostMarker.lat, longitude: ghostMarker.lng }}
             title={ghost?.displayName ?? "Ghost"}
-            pinColor="gold"
+            pinColor={colors.gold}
           />
         )}
       </MapView>
@@ -241,11 +243,11 @@ export default function RecordRunScreen({ route, navigation }: Props) {
 
       <View style={styles.hud}>
         <Text style={styles.segmentName}>{segment.name}</Text>
-        {autoStart && <Text style={styles.autoBadge}>Auto-detected -- racing started automatically</Text>}
+        {autoStart && <Text style={styles.autoBadge}>AUTO-DETECTED -- RACING STARTED AUTOMATICALLY</Text>}
         <Text style={styles.time}>{formatDuration(elapsedMs)}</Text>
         {ghost ? (
           deltaMs != null && (
-            <Text style={[styles.delta, { color: deltaMs >= 0 ? "#34d058" : "#ff3b30" }]}>
+            <Text style={[styles.delta, { color: deltaMs >= 0 ? colors.cyan : colors.racePrimary }]}>
               {deltaMs >= 0 ? "AHEAD" : "BEHIND"} by {formatDuration(Math.abs(deltaMs))}
             </Text>
           )
@@ -261,62 +263,55 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      <Pressable
-        style={[styles.button, recording && styles.buttonStop]}
+      <NeonButton
+        label={submitting ? "SUBMITTING..." : recording ? "FINISH RUN" : "START RUN"}
         onPress={recording ? stopRun : startRun}
         disabled={submitting}
-      >
-        <Text style={styles.buttonText}>
-          {submitting ? "Submitting..." : recording ? "Finish run" : "Start run"}
-        </Text>
-      </Pressable>
+        variant={recording ? "outline" : "primary"}
+        style={styles.button}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b0b0f" },
-  centered: { flex: 1, backgroundColor: "#0b0b0f", alignItems: "center", justifyContent: "center" },
+  container: { flex: 1, backgroundColor: colors.bg },
+  centered: { flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" },
   cancelButton: {
     position: "absolute",
     top: 50,
     left: 16,
     width: 36,
     height: 36,
-    borderRadius: 18,
-    backgroundColor: "#000000cc",
+    borderRadius: 4,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.panelBorder,
     alignItems: "center",
     justifyContent: "center",
   },
-  cancelText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+  cancelText: { color: colors.cyan, fontSize: 16, fontWeight: "800" },
   hud: {
     position: "absolute",
     top: 60,
     left: 20,
     right: 20,
-    backgroundColor: "#000000cc",
+    ...panelStyle,
     padding: 16,
-    borderRadius: 16,
   },
-  segmentName: { color: "#8e8e96", fontSize: 13, textAlign: "center", marginBottom: 4 },
-  autoBadge: { color: "#34d058", fontSize: 11, fontWeight: "700", textAlign: "center", marginBottom: 4 },
-  time: { color: "#fff", fontSize: 40, fontWeight: "800", textAlign: "center" },
-  delta: { fontSize: 16, fontWeight: "700", textAlign: "center", marginTop: 4 },
-  noGhost: { color: "#8e8e96", fontSize: 13, textAlign: "center", marginTop: 4 },
-  speed: { color: "#c7c7cf", fontSize: 14, textAlign: "center", marginTop: 8 },
-  topSpeed: { color: "#8e8e96", fontSize: 12 },
-  progressTrack: { height: 6, backgroundColor: "#26262f", borderRadius: 3, marginTop: 12, overflow: "hidden" },
-  progressFill: { height: 6, backgroundColor: "#3b82f6" },
+  segmentName: { color: colors.textSecondary, fontSize: 13, textAlign: "center", marginBottom: 4 },
+  autoBadge: { color: colors.cyan, fontSize: 10, fontWeight: "700", textAlign: "center", marginBottom: 4, letterSpacing: 0.5 },
+  time: { color: colors.textPrimary, fontFamily: fonts.display, fontSize: 38, textAlign: "center" },
+  delta: { fontFamily: fonts.heading, fontSize: 15, textAlign: "center", marginTop: 6 },
+  noGhost: { color: colors.textSecondary, fontSize: 13, textAlign: "center", marginTop: 4 },
+  speed: { color: colors.textSecondary, fontSize: 14, textAlign: "center", marginTop: 8 },
+  topSpeed: { color: colors.textMuted, fontSize: 12 },
+  progressTrack: { height: 6, backgroundColor: colors.bgElevated, borderRadius: 3, marginTop: 12, overflow: "hidden" },
+  progressFill: { height: 6, backgroundColor: colors.cyan },
   button: {
     position: "absolute",
     bottom: 30,
     left: 20,
     right: 20,
-    backgroundColor: "#ff3b30",
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: "center",
   },
-  buttonStop: { backgroundColor: "#1e1e26" },
-  buttonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
 });

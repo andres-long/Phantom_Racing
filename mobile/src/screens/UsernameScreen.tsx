@@ -1,8 +1,11 @@
 import React, { useState } from "react";
-import { View, Text, StyleSheet, TextInput, Pressable, KeyboardAvoidingView, Platform, Alert } from "react-native";
+import { View, Text, StyleSheet, TextInput, KeyboardAvoidingView, Platform, Alert } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
 import { useUser } from "../context/UserContext";
+import { colors, fonts } from "../theme";
+import GridBackground from "../components/GridBackground";
+import NeonButton from "../components/NeonButton";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Username">;
 
@@ -55,8 +58,9 @@ function AuthForm() {
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <GridBackground />
       <View style={styles.content}>
-        <Text style={styles.title}>{mode === "signup" ? "Create your racer account" : "Welcome back"}</Text>
+        <Text style={styles.title}>{mode === "signup" ? "CREATE YOUR RACER" : "WELCOME BACK"}</Text>
         <Text style={styles.subtitle}>
           {mode === "signup"
             ? "Your name and leaderboard history are tied to this account -- log back in with it on any phone, no need to start over."
@@ -65,7 +69,7 @@ function AuthForm() {
         <TextInput
           style={styles.input}
           placeholder="Racer name"
-          placeholderTextColor="#8e8e96"
+          placeholderTextColor={colors.textMuted}
           value={name}
           onChangeText={setName}
           maxLength={24}
@@ -75,7 +79,7 @@ function AuthForm() {
         <TextInput
           style={styles.input}
           placeholder="Password"
-          placeholderTextColor="#8e8e96"
+          placeholderTextColor={colors.textMuted}
           value={password}
           onChangeText={setPassword}
           secureTextEntry
@@ -87,7 +91,7 @@ function AuthForm() {
           <TextInput
             style={styles.input}
             placeholder="Confirm password"
-            placeholderTextColor="#8e8e96"
+            placeholderTextColor={colors.textMuted}
             value={confirmPassword}
             onChangeText={setConfirmPassword}
             secureTextEntry
@@ -96,19 +100,18 @@ function AuthForm() {
             onSubmitEditing={onSubmit}
           />
         )}
-        <Pressable style={styles.button} onPress={onSubmit} disabled={submitting}>
-          <Text style={styles.buttonText}>
-            {submitting ? "Please wait..." : mode === "signup" ? "Sign up" : "Log in"}
-          </Text>
-        </Pressable>
-        <Pressable
-          style={styles.switchModeButton}
+        <NeonButton
+          label={submitting ? "PLEASE WAIT..." : mode === "signup" ? "SIGN UP" : "LOG IN"}
+          onPress={onSubmit}
+          disabled={submitting}
+          style={styles.submitButton}
+        />
+        <NeonButton
+          label={mode === "signup" ? "ALREADY HAVE AN ACCOUNT? LOG IN" : "NEW HERE? CREATE AN ACCOUNT"}
           onPress={() => setMode(mode === "signup" ? "login" : "signup")}
-        >
-          <Text style={styles.switchModeText}>
-            {mode === "signup" ? "Already have an account? Log in" : "New here? Create an account"}
-          </Text>
-        </Pressable>
+          variant="ghost"
+          style={styles.switchModeButton}
+        />
       </View>
     </KeyboardAvoidingView>
   );
@@ -149,8 +152,9 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <GridBackground />
       <View style={styles.content}>
-        <Text style={styles.title}>Change your name</Text>
+        <Text style={styles.title}>CHANGE YOUR NAME</Text>
         <Text style={styles.subtitle}>
           This is what shows up on leaderboards and ghost races, for the multiplayer experience
           -- so other racers know who they're chasing (or being chased by).
@@ -158,7 +162,7 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
         <TextInput
           style={styles.input}
           placeholder="e.g. NightRider"
-          placeholderTextColor="#8e8e96"
+          placeholderTextColor={colors.textMuted}
           value={name}
           onChangeText={setName}
           maxLength={24}
@@ -167,36 +171,34 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
           returnKeyType="done"
           onSubmitEditing={onSave}
         />
-        <Pressable style={styles.button} onPress={onSave} disabled={saving}>
-          <Text style={styles.buttonText}>{saving ? "Saving..." : "Save"}</Text>
-        </Pressable>
-        <Pressable style={styles.logOutButton} onPress={onLogOut}>
-          <Text style={styles.logOutText}>Log out</Text>
-        </Pressable>
+        <NeonButton
+          label={saving ? "SAVING..." : "SAVE"}
+          onPress={onSave}
+          disabled={saving}
+          style={styles.submitButton}
+        />
+        <NeonButton label="LOG OUT" onPress={onLogOut} variant="ghost" style={styles.logOutButton} />
       </View>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b0b0f" },
+  container: { flex: 1, backgroundColor: colors.bg },
   content: { flex: 1, padding: 20, justifyContent: "center" },
-  title: { color: "#fff", fontSize: 26, fontWeight: "800", marginBottom: 10 },
-  subtitle: { color: "#8e8e96", fontSize: 14, lineHeight: 20, marginBottom: 24 },
+  title: { color: colors.textPrimary, fontFamily: fonts.display, fontSize: 22, letterSpacing: 1.5, marginBottom: 12 },
+  subtitle: { color: colors.textSecondary, fontSize: 14, lineHeight: 20, marginBottom: 24 },
   input: {
-    backgroundColor: "#17171d",
-    color: "#fff",
+    backgroundColor: colors.panel,
+    color: colors.textPrimary,
     padding: 16,
-    borderRadius: 12,
-    fontSize: 18,
+    borderRadius: 4,
+    fontSize: 17,
     borderWidth: 1,
-    borderColor: "#33333d",
+    borderColor: colors.panelBorder,
     marginBottom: 16,
   },
-  button: { backgroundColor: "#ff3b30", borderRadius: 14, paddingVertical: 16, alignItems: "center" },
-  buttonText: { color: "#fff", fontSize: 17, fontWeight: "700" },
-  switchModeButton: { marginTop: 20, alignItems: "center" },
-  switchModeText: { color: "#8e8e96", fontSize: 14, fontWeight: "600" },
-  logOutButton: { marginTop: 16, alignItems: "center", paddingVertical: 10 },
-  logOutText: { color: "#ff6b6b", fontSize: 14, fontWeight: "700" },
+  submitButton: { marginTop: 4 },
+  switchModeButton: { marginTop: 16 },
+  logOutButton: { marginTop: 16 },
 });

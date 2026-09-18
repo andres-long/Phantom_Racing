@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, Pressable, TextInput, Alert } from "react-native";
+import { View, Text, StyleSheet, TextInput, Alert } from "react-native";
 import MapView, { Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -7,6 +7,8 @@ import { RootStackParamList, LatLng } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { polylineLength } from "../utils/geo";
+import { colors, fonts, panelStyle } from "../theme";
+import NeonButton from "../components/NeonButton";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
 type TracePoint = LatLng & { t: number };
@@ -26,6 +28,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const maxSpeedRef = useRef(0);
+  const mapRef = useRef<MapView | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -47,15 +50,20 @@ export default function CreateSegmentScreen({ navigation }: Props) {
     subscriptionRef.current = await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 5 },
       (loc) => {
-        setTrace((prev) => [
-          ...prev,
-          { lat: loc.coords.latitude, lng: loc.coords.longitude, t: Date.now() },
-        ]);
+        const point = { lat: loc.coords.latitude, lng: loc.coords.longitude, t: Date.now() };
+        setTrace((prev) => [...prev, point]);
         const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
         setSpeedKmh(currentSpeedKmh);
         if (currentSpeedKmh > maxSpeedRef.current) {
           maxSpeedRef.current = currentSpeedKmh;
         }
+        // Keep the map following you the whole recording, same as an actual
+        // race -- otherwise the view stays wherever it opened and the road
+        // you're drawing quickly runs off screen.
+        mapRef.current?.animateToRegion(
+          { latitude: point.lat, longitude: point.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
+          500
+        );
       }
     );
   };
@@ -108,6 +116,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         showsUserLocation
@@ -121,7 +130,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         {trace.length > 1 && (
           <Polyline
             coordinates={trace.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
-            strokeColor="#ff3b30"
+            strokeColor={colors.cyan}
             strokeWidth={5}
           />
         )}
@@ -129,7 +138,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
 
       <View style={styles.hud}>
         <Text style={styles.hudText}>
-          {recording ? `Recording... ${Math.round(polylineLength(trace))}m` : "Not recording"}
+          {recording ? `RECORDING -- ${Math.round(polylineLength(trace))}m` : "NOT RECORDING"}
         </Text>
         {recording && (
           <>
@@ -140,25 +149,27 @@ export default function CreateSegmentScreen({ navigation }: Props) {
       </View>
 
       {!naming ? (
-        <Pressable
-          style={[styles.button, recording && styles.buttonStop]}
+        <NeonButton
+          label={recording ? "STOP" : "START RECORDING THIS ROAD"}
           onPress={recording ? stopRecording : startRecording}
-        >
-          <Text style={styles.buttonText}>{recording ? "Stop" : "Start recording this road"}</Text>
-        </Pressable>
+          variant={recording ? "outline" : "primary"}
+          style={styles.button}
+        />
       ) : (
         <View style={styles.namingBox}>
           <TextInput
             style={styles.input}
             placeholder="Segment name"
-            placeholderTextColor="#8e8e96"
+            placeholderTextColor={colors.textMuted}
             value={name}
             onChangeText={setName}
             autoFocus
           />
-          <Pressable style={styles.buttonInline} onPress={submit} disabled={submitting}>
-            <Text style={styles.buttonText}>{submitting ? "Saving..." : "Save segment"}</Text>
-          </Pressable>
+          <NeonButton
+            label={submitting ? "SAVING..." : "SAVE SEGMENT"}
+            onPress={submit}
+            disabled={submitting}
+          />
         </View>
       )}
     </View>
@@ -166,37 +177,25 @@ export default function CreateSegmentScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b0b0f" },
-  hud: { position: "absolute", top: 60, left: 20, right: 20, backgroundColor: "#000000aa", padding: 12, borderRadius: 12 },
-  hudText: { color: "#fff", fontWeight: "600", textAlign: "center" },
-  speedText: { color: "#c7c7cf", fontSize: 13, textAlign: "center", marginTop: 4 },
-  trackingHint: { color: "#8e8e96", fontSize: 11, textAlign: "center", marginTop: 4 },
+  container: { flex: 1, backgroundColor: colors.bg },
+  hud: { position: "absolute", top: 60, left: 20, right: 20, ...panelStyle, padding: 14 },
+  hudText: { color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 13, textAlign: "center", letterSpacing: 1 },
+  speedText: { color: colors.cyan, fontFamily: fonts.display, fontSize: 20, textAlign: "center", marginTop: 6 },
+  trackingHint: { color: colors.textSecondary, fontSize: 11, textAlign: "center", marginTop: 6 },
   button: {
     position: "absolute",
     bottom: 30,
     left: 20,
     right: 20,
-    backgroundColor: "#ff3b30",
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: "center",
   },
-  buttonStop: { backgroundColor: "#444" },
-  buttonInline: {
-    backgroundColor: "#ff3b30",
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: "center",
-  },
-  buttonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
   namingBox: { position: "absolute", bottom: 30, left: 20, right: 20 },
   input: {
-    backgroundColor: "#17171d",
-    color: "#fff",
+    backgroundColor: colors.panel,
+    color: colors.textPrimary,
     padding: 14,
-    borderRadius: 12,
+    borderRadius: 4,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: "#33333d",
+    borderColor: colors.panelBorder,
   },
 });

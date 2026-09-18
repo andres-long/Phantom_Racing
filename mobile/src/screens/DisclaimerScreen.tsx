@@ -1,6 +1,9 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
+import { View, Text, StyleSheet, ScrollView } from "react-native";
 import { useUser } from "../context/UserContext";
+import { colors, fonts } from "../theme";
+import GridBackground from "../components/GridBackground";
+import NeonButton from "../components/NeonButton";
 
 // First-launch gate. This app is intentionally "ghost racing" (you vs.
 // recorded times on a road you already drive), not live head-to-head racing
@@ -12,8 +15,9 @@ export default function DisclaimerScreen() {
 
   return (
     <View style={styles.container}>
+      <GridBackground />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>Before you race</Text>
+        <Text style={styles.title}>BEFORE YOU RACE</Text>
         <Text style={styles.paragraph}>
           This app times you against your own or other drivers' recorded runs on stretches of
           road ("segments") -- like a leaderboard, not a live race. You never share the road at
@@ -30,18 +34,15 @@ export default function DisclaimerScreen() {
           better yet, closed courses and legal track/autocross events.
         </Text>
       </ScrollView>
-      <Pressable style={styles.button} onPress={acceptDisclaimer}>
-        <Text style={styles.buttonText}>I understand -- let's go</Text>
-      </Pressable>
+      <NeonButton label="I UNDERSTAND -- LET'S GO" onPress={acceptDisclaimer} style={styles.button} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b0b0f", padding: 20, justifyContent: "space-between" },
+  container: { flex: 1, backgroundColor: colors.bg, padding: 20, justifyContent: "space-between" },
   scroll: { paddingTop: 60, paddingBottom: 20 },
-  title: { color: "#fff", fontSize: 28, fontWeight: "700", marginBottom: 16 },
-  paragraph: { color: "#c7c7cf", fontSize: 15, lineHeight: 22, marginBottom: 16 },
-  button: { backgroundColor: "#ff3b30", borderRadius: 14, paddingVertical: 16, alignItems: "center", marginBottom: 20 },
-  buttonText: { color: "#fff", fontSize: 17, fontWeight: "700" },
+  title: { color: colors.textPrimary, fontFamily: fonts.display, fontSize: 22, letterSpacing: 1.5, marginBottom: 18 },
+  paragraph: { color: colors.textSecondary, fontSize: 15, lineHeight: 22, marginBottom: 16 },
+  button: { marginBottom: 20 },
 });

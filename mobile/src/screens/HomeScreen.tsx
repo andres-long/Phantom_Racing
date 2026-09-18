@@ -8,6 +8,8 @@ import { RootStackParamList, SegmentSummary, LatLng } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { cumulativeDistances, projectOntoPolyline, pointAtDistance, haversine } from "../utils/geo";
+import { colors, fonts, panelStyle } from "../theme";
+import NeonButton from "../components/NeonButton";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
@@ -178,7 +180,7 @@ export default function HomeScreen({ navigation }: Props) {
             <React.Fragment key={s.id}>
               <Polyline
                 coordinates={s.points.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
-                strokeColor={isSelected ? "#ff3b30" : "#3b82f6"}
+                strokeColor={isSelected ? colors.racePrimary : colors.cyan}
                 strokeWidth={isSelected ? 6 : 4}
                 tappable
                 onPress={() => setSelectedId(s.id)}
@@ -206,10 +208,10 @@ export default function HomeScreen({ navigation }: Props) {
           </Text>
         </Pressable>
         <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("AllSegments")}>
-          <Text style={styles.topBarButtonText}>All tracks</Text>
+          <Text style={styles.topBarButtonText}>ALL TRACKS</Text>
         </Pressable>
         <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("Welcome")}>
-          <Text style={styles.topBarButtonText}>How it works</Text>
+          <Text style={styles.topBarButtonText}>HOW IT WORKS</Text>
         </Pressable>
       </View>
 
@@ -225,7 +227,7 @@ export default function HomeScreen({ navigation }: Props) {
 
       <View style={styles.speedHud}>
         {loading ? (
-          <ActivityIndicator color="#ff3b30" />
+          <ActivityIndicator color={colors.cyan} />
         ) : (
           <>
             <Text style={styles.speedValue}>{Math.round(speedKmh)}</Text>
@@ -254,31 +256,33 @@ export default function HomeScreen({ navigation }: Props) {
               : "No runs yet -- be the first"}
           </Text>
           <View style={styles.cardActions}>
-            <Pressable
-              style={[styles.cardButton, styles.cardButtonPrimary]}
+            <NeonButton
+              label="RACE IT"
               onPress={() => navigation.navigate("RecordRun", { segmentId: selected.id })}
-            >
-              <Text style={styles.cardButtonText}>Race it</Text>
-            </Pressable>
-            <Pressable
               style={styles.cardButton}
+            />
+            <NeonButton
+              label="LEADERBOARD"
+              variant="outline"
               onPress={() => navigation.navigate("Leaderboard", { segmentId: selected.id, segmentName: selected.name })}
-            >
-              <Text style={styles.cardButtonText}>Leaderboard</Text>
-            </Pressable>
+              style={styles.cardButton}
+            />
           </View>
         </View>
       )}
 
-      <Pressable style={styles.fab} onPress={() => navigation.navigate("CreateSegment")}>
-        <Text style={styles.fabText}>+ New segment</Text>
-      </Pressable>
+      <NeonButton
+        label="+ NEW SEGMENT"
+        variant="outline"
+        onPress={() => navigation.navigate("CreateSegment")}
+        style={styles.fab}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b0b0f" },
+  container: { flex: 1, backgroundColor: colors.bg },
   topBar: {
     position: "absolute",
     top: 50,
@@ -290,99 +294,88 @@ const styles = StyleSheet.create({
   },
   topBarLeft: {
     flex: 1,
-    backgroundColor: "#000000cc",
-    borderRadius: 10,
+    ...panelStyle,
     paddingVertical: 8,
     paddingHorizontal: 12,
   },
-  topBarName: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  topBarName: { color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 12 },
   topBarButton: {
-    backgroundColor: "#000000cc",
-    borderRadius: 10,
+    ...panelStyle,
     paddingVertical: 8,
     paddingHorizontal: 10,
   },
-  topBarButtonText: { color: "#c7c7cf", fontSize: 12, fontWeight: "600" },
+  topBarButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "700", letterSpacing: 0.5 },
   errorBox: {
     position: "absolute",
     top: 96,
     left: 16,
     right: 16,
     backgroundColor: "#2a1414ee",
-    borderRadius: 10,
+    borderRadius: 4,
     padding: 10,
+    borderWidth: 1,
+    borderColor: colors.danger,
   },
-  errorText: { color: "#ff6b6b", fontSize: 12, fontWeight: "600" },
+  errorText: { color: colors.danger, fontSize: 12, fontWeight: "600" },
   trackLabel: {
     backgroundColor: "#000000dd",
-    borderRadius: 8,
+    borderRadius: 4,
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderWidth: 1.5,
-    borderColor: "#3b82f6",
+    borderColor: colors.cyan,
     maxWidth: 150,
   },
   trackLabelSelected: {
-    backgroundColor: "#ff3b30",
-    borderColor: "#ff3b30",
+    backgroundColor: colors.racePrimary,
+    borderColor: colors.racePrimary,
   },
-  trackLabelText: { color: "#fff", fontSize: 11, fontWeight: "700" },
+  trackLabelText: { color: colors.textPrimary, fontSize: 11, fontWeight: "700" },
   recenterButton: {
     position: "absolute",
     right: 16,
     bottom: 170,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: "#000000cc",
+    borderRadius: 4,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.panelBorder,
     alignItems: "center",
     justifyContent: "center",
   },
-  recenterIcon: { color: "#fff", fontSize: 18, fontWeight: "800" },
+  recenterIcon: { color: colors.cyan, fontSize: 18, fontWeight: "800" },
   speedHud: {
     position: "absolute",
     left: 16,
     bottom: 100,
-    backgroundColor: "#000000cc",
-    borderRadius: 16,
+    ...panelStyle,
     paddingVertical: 12,
     paddingHorizontal: 18,
     alignItems: "center",
     minWidth: 110,
   },
-  speedValue: { color: "#fff", fontSize: 34, fontWeight: "800", lineHeight: 38 },
-  speedUnit: { color: "#8e8e96", fontSize: 12, marginBottom: 4 },
-  nearbyCount: { color: "#c7c7cf", fontSize: 11, marginTop: 4, textAlign: "center" },
+  speedValue: { color: colors.cyan, fontFamily: fonts.display, fontSize: 32, lineHeight: 38 },
+  speedUnit: { color: colors.textSecondary, fontSize: 11, marginBottom: 4, letterSpacing: 1 },
+  nearbyCount: { color: colors.textSecondary, fontSize: 11, marginTop: 4, textAlign: "center" },
   card: {
     position: "absolute",
     left: 16,
     right: 16,
     bottom: 100,
-    backgroundColor: "#17171dee",
-    borderRadius: 16,
+    ...panelStyle,
     padding: 16,
-    borderWidth: 1,
-    borderColor: "#33333d",
   },
   cardClose: { position: "absolute", top: 10, right: 12, padding: 4 },
-  cardCloseText: { color: "#8e8e96", fontSize: 16, fontWeight: "700" },
-  cardTitle: { color: "#fff", fontSize: 18, fontWeight: "700", marginBottom: 4, paddingRight: 24 },
-  cardMeta: { color: "#9c9ca6", fontSize: 13, marginTop: 2 },
-  cardActions: { flexDirection: "row", marginTop: 12, gap: 10 },
-  cardButton: { flex: 1, backgroundColor: "#26262f", paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  cardButtonPrimary: { backgroundColor: "#ff3b30" },
-  cardButtonText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  cardCloseText: { color: colors.textSecondary, fontSize: 16, fontWeight: "700" },
+  cardTitle: { color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 16, marginBottom: 6, paddingRight: 24 },
+  cardMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
+  cardActions: { flexDirection: "row", marginTop: 14, gap: 10 },
+  cardButton: { flex: 1 },
   fab: {
     position: "absolute",
     bottom: 24,
     left: 20,
     width: "44%",
-    backgroundColor: "#1e1e26",
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#33333d",
   },
-  fabText: { color: "#fff", fontWeight: "700" },
 });

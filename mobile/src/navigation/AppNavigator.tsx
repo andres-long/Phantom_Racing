@@ -4,6 +4,7 @@ import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
 import { useUser } from "../context/UserContext";
+import { colors, fonts } from "../theme";
 import WelcomeScreen from "../screens/WelcomeScreen";
 import DisclaimerScreen from "../screens/DisclaimerScreen";
 import UsernameScreen from "../screens/UsernameScreen";
@@ -18,8 +19,19 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 const navTheme = {
   ...DarkTheme,
-  colors: { ...DarkTheme.colors, background: "#0b0b0f", card: "#0b0b0f" },
+  colors: { ...DarkTheme.colors, background: colors.bg, card: colors.bgElevated, primary: colors.cyan },
 };
+
+// Shared look for the handful of screens that use a native header bar
+// (AllSegments, Username, Welcome-as-revisit, Leaderboard) -- dark glass
+// bar, cyan back-button/title tint, Orbitron title text, and a glowing
+// cyan hairline instead of the default header shadow.
+const headerOptions = {
+  headerStyle: { backgroundColor: colors.bgElevated },
+  headerTintColor: colors.cyan,
+  headerTitleStyle: { fontFamily: fonts.heading, fontSize: 15, color: colors.textPrimary, letterSpacing: 1 },
+  headerShadowVisible: false,
+} as const;
 
 export default function AppNavigator() {
   const { welcomeSeen, disclaimerAccepted, user, loading } = useUser();
@@ -29,7 +41,7 @@ export default function AppNavigator() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color="#ff3b30" size="large" />
+        <ActivityIndicator color={colors.cyan} size="large" />
       </View>
     );
   }
@@ -59,7 +71,7 @@ export default function AppNavigator() {
             <Stack.Screen
               name="AllSegments"
               component={AllSegmentsScreen}
-              options={{ headerShown: true, title: "All tracks" }}
+              options={{ ...headerOptions, headerShown: true, title: "ALL TRACKS" }}
             />
             <Stack.Screen name="CreateSegment" component={CreateSegmentScreen} />
             <Stack.Screen name="RecordRun" component={RecordRunScreen} />
@@ -67,17 +79,17 @@ export default function AppNavigator() {
             <Stack.Screen
               name="Username"
               component={UsernameScreen}
-              options={{ headerShown: true, title: "Account" }}
+              options={{ ...headerOptions, headerShown: true, title: "ACCOUNT" }}
             />
             <Stack.Screen
               name="Welcome"
               component={WelcomeScreen}
-              options={{ headerShown: true, title: "How it works" }}
+              options={{ ...headerOptions, headerShown: true, title: "HOW IT WORKS" }}
             />
             <Stack.Screen
               name="Leaderboard"
               component={LeaderboardScreen}
-              options={{ headerShown: true, title: "" }}
+              options={{ ...headerOptions, headerShown: true, title: "" }}
             />
           </>
         )}
@@ -89,7 +101,7 @@ export default function AppNavigator() {
 const styles = StyleSheet.create({
   centered: {
     flex: 1,
-    backgroundColor: "#0b0b0f",
+    backgroundColor: colors.bg,
     alignItems: "center",
     justifyContent: "center",
     padding: 24,

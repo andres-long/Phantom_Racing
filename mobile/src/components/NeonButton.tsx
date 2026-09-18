@@ -25,7 +25,9 @@ export default function NeonButton({ label, onPress, disabled, variant = "primar
         disabled={disabled}
         style={[styles.outline, style, disabled && styles.disabled]}
       >
-        <Text style={styles.outlineText}>{label}</Text>
+        <Text style={styles.outlineText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+          {label}
+        </Text>
       </Pressable>
     );
   }
@@ -33,7 +35,9 @@ export default function NeonButton({ label, onPress, disabled, variant = "primar
   if (variant === "ghost") {
     return (
       <Pressable onPress={onPress} disabled={disabled} style={[styles.ghost, style, disabled && styles.disabled]}>
-        <Text style={styles.ghostText}>{label}</Text>
+        <Text style={styles.ghostText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+          {label}
+        </Text>
       </Pressable>
     );
   }
@@ -41,7 +45,9 @@ export default function NeonButton({ label, onPress, disabled, variant = "primar
   return (
     <Pressable onPress={onPress} disabled={disabled} style={[styles.wrap, style, disabled && styles.disabled]}>
       <LinearGradient colors={gradients.race} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.gradient}>
-        <Text style={styles.primaryText}>{label}</Text>
+        <Text style={styles.primaryText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+          {label}
+        </Text>
       </LinearGradient>
     </Pressable>
   );
@@ -49,18 +55,31 @@ export default function NeonButton({ label, onPress, disabled, variant = "primar
 
 const styles = StyleSheet.create({
   wrap: { borderRadius: 8, overflow: "hidden" },
-  gradient: { paddingVertical: 16, alignItems: "center", justifyContent: "center" },
-  primaryText: { color: "#05070c", fontFamily: fonts.heading, fontSize: 15, letterSpacing: 1.5 },
+  gradient: { paddingVertical: 16, paddingHorizontal: 6, alignItems: "center", justifyContent: "center" },
+  primaryText: { color: "#05070c", fontFamily: fonts.heading, fontSize: 15, letterSpacing: 1, textAlign: "center" },
   outline: {
     borderWidth: 1.5,
     borderColor: colors.cyan,
     borderRadius: 8,
     paddingVertical: 15,
+    paddingHorizontal: 6,
     alignItems: "center",
     backgroundColor: colors.cyanDim,
   },
-  outlineText: { color: colors.cyan, fontFamily: fonts.heading, fontSize: 14, letterSpacing: 1.5 },
+  outlineText: {
+    color: colors.cyan,
+    fontFamily: fonts.heading,
+    fontSize: 13,
+    letterSpacing: 0.5,
+    textAlign: "center",
+  },
   ghost: { paddingVertical: 10, alignItems: "center" },
-  ghostText: { color: colors.textSecondary, fontFamily: fonts.label, fontSize: 12, letterSpacing: 1.5 },
+  ghostText: {
+    color: colors.textSecondary,
+    fontFamily: fonts.label,
+    fontSize: 12,
+    letterSpacing: 1,
+    textAlign: "center",
+  },
   disabled: { opacity: 0.45 },
 });

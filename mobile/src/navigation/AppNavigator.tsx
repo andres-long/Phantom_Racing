@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
+import { View, StyleSheet, ActivityIndicator } from "react-native";
 import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
@@ -22,28 +22,14 @@ const navTheme = {
 };
 
 export default function AppNavigator() {
-  const { welcomeSeen, disclaimerAccepted, usernameChosen, user, loading, error, retry } = useUser();
+  const { welcomeSeen, disclaimerAccepted, user, loading } = useUser();
 
-  // Once past welcome + disclaimer, don't let the person wander into
-  // screens that silently no-op without a registered user (e.g. Save
-  // segment doing nothing) -- show a connecting/retry state instead until
-  // the backend registration actually succeeds.
-  if (welcomeSeen && disclaimerAccepted && !user) {
-    if (loading) {
-      return (
-        <View style={styles.centered}>
-          <ActivityIndicator color="#ff3b30" size="large" />
-          <Text style={styles.connectingText}>Connecting to server...</Text>
-        </View>
-      );
-    }
+  // Brief check of AsyncStorage for a saved account on cold start -- not a
+  // network call, so this is normally sub-second.
+  if (loading) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.errorTitle}>Couldn't connect</Text>
-        <Text style={styles.errorText}>{error || "Something went wrong reaching the server."}</Text>
-        <Pressable style={styles.retryButton} onPress={retry}>
-          <Text style={styles.retryButtonText}>Retry</Text>
-        </Pressable>
+        <ActivityIndicator color="#ff3b30" size="large" />
       </View>
     );
   }
@@ -55,7 +41,9 @@ export default function AppNavigator() {
   // "auth flow" pattern: https://reactnavigation.org/docs/auth-flow/).
   // When the set of screens changes, the navigator automatically resets to
   // the first screen in the new set. Onboarding order: Welcome (what this
-  // app is) -> Disclaimer (safety) -> Username (who you race as) -> Home.
+  // app is) -> Disclaimer (safety) -> Username (sign up / log in) -> Home.
+  // Logging out drops `user` back to null, which sends you right back to
+  // the Username screen (in its sign-up/log-in mode) the same way.
   return (
     <NavigationContainer theme={navTheme}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -63,7 +51,7 @@ export default function AppNavigator() {
           <Stack.Screen name="Welcome" component={WelcomeScreen} />
         ) : !disclaimerAccepted ? (
           <Stack.Screen name="Disclaimer" component={DisclaimerScreen} />
-        ) : !usernameChosen ? (
+        ) : !user ? (
           <Stack.Screen name="Username" component={UsernameScreen} />
         ) : (
           <>
@@ -79,7 +67,7 @@ export default function AppNavigator() {
             <Stack.Screen
               name="Username"
               component={UsernameScreen}
-              options={{ headerShown: true, title: "Change name" }}
+              options={{ headerShown: true, title: "Account" }}
             />
             <Stack.Screen
               name="Welcome"
@@ -106,14 +94,4 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 24,
   },
-  connectingText: { color: "#8e8e96", marginTop: 16, fontSize: 14 },
-  errorTitle: { color: "#fff", fontSize: 20, fontWeight: "700", marginBottom: 8 },
-  errorText: { color: "#8e8e96", fontSize: 14, textAlign: "center", marginBottom: 24 },
-  retryButton: {
-    backgroundColor: "#ff3b30",
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 32,
-  },
-  retryButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
 });

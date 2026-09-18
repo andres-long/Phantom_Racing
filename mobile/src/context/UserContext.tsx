@@ -6,65 +6,27 @@ import { User } from "../types";
 type UserContextValue = {
   user: User | null;
   loading: boolean;
-  error: string | null;
   welcomeSeen: boolean;
   disclaimerAccepted: boolean;
-  usernameChosen: boolean;
   completeWelcome: () => Promise<void>;
   acceptDisclaimer: () => Promise<void>;
-  completeUsername: (name: string) => Promise<void>;
+  register: (name: string, password: string) => Promise<void>;
+  login: (name: string, password: string) => Promise<void>;
   setDisplayName: (name: string) => Promise<void>;
-  retry: () => Promise<void>;
+  logOut: () => Promise<void>;
 };
 
 const UserContext = createContext<UserContextValue | null>(null);
 
-const DEVICE_ID_KEY = "nfs.deviceId";
+const ACCOUNT_KEY = "nfs.account";
 const WELCOME_KEY = "nfs.welcomeSeen";
 const DISCLAIMER_KEY = "nfs.disclaimerAccepted";
-const USERNAME_KEY = "nfs.usernameChosen";
-
-function randomId(): string {
-  // Good enough uniqueness for an MVP device identifier; not a real UUID lib
-  // to avoid another native dependency (expo-crypto) for something this
-  // low-stakes.
-  return "dev_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [welcomeSeen, setWelcomeSeen] = useState(false);
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
-  const [usernameChosen, setUsernameChosen] = useState(false);
-
-  // Registers this device with the backend. Returns true on success. Used
-  // both on startup and from a manual "Retry" button.
-  const register = async (): Promise<boolean> => {
-    setError(null);
-    try {
-      let deviceId = await AsyncStorage.getItem(DEVICE_ID_KEY);
-      if (!deviceId) {
-        deviceId = randomId();
-        await AsyncStorage.setItem(DEVICE_ID_KEY, deviceId);
-      }
-      const registered = await api.registerUser(deviceId, "Racer");
-      setUser(registered);
-      return true;
-    } catch (e: any) {
-      // The backend's free tier can take up to ~60s to wake up from idle,
-      // or may be mid-deploy for a few seconds -- so a first failure here
-      // doesn't necessarily mean anything is actually broken.
-      console.warn("Failed to reach backend:", e);
-      setError(e.message || "Couldn't reach the server.");
-      return false;
-    }
-  };
 
   useEffect(() => {
     (async () => {
@@ -72,25 +34,49 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       setWelcomeSeen(seenWelcome);
       const accepted = (await AsyncStorage.getItem(DISCLAIMER_KEY)) === "true";
       setDisclaimerAccepted(accepted);
-      const chosenName = (await AsyncStorage.getItem(USERNAME_KEY)) === "true";
-      setUsernameChosen(chosenName);
 
-      // Retry a handful of times with a short delay before giving up and
-      // showing a manual retry screen -- covers the free-tier cold-start
-      // case without making the person tap Retry themselves every time.
-      for (let attempt = 0; attempt < 8; attempt++) {
-        const ok = await register();
-        if (ok) break;
-        if (attempt < 7) await sleep(5000);
+      // A signed-in account, saved locally after register/login, so the
+      // app doesn't ask again on every launch -- only a fresh install (or
+      // an explicit log out) does. This is what makes a name and its
+      // leaderboard history survive a reinstall or a new phone: log back
+      // in there with the same name + password and this same account
+      // (and everything tied to it) loads right back up.
+      const savedAccount = await AsyncStorage.getItem(ACCOUNT_KEY);
+      if (savedAccount) {
+        try {
+          setUser(JSON.parse(savedAccount));
+        } catch {
+          await AsyncStorage.removeItem(ACCOUNT_KEY);
+        }
       }
       setLoading(false);
     })();
   }, []);
 
-  const retry = async () => {
-    setLoading(true);
-    await register();
-    setLoading(false);
+  const persistUser = async (nextUser: User) => {
+    await AsyncStorage.setItem(ACCOUNT_KEY, JSON.stringify(nextUser));
+    setUser(nextUser);
+  };
+
+  const register = async (name: string, password: string) => {
+    const account = await api.register(name, password);
+    await persistUser(account);
+  };
+
+  const login = async (name: string, password: string) => {
+    const account = await api.login(name, password);
+    await persistUser(account);
+  };
+
+  const setDisplayName = async (name: string) => {
+    if (!user) return;
+    const updated = await api.updateDisplayName(user.deviceId, name);
+    await persistUser(updated);
+  };
+
+  const logOut = async () => {
+    await AsyncStorage.removeItem(ACCOUNT_KEY);
+    setUser(null);
   };
 
   const completeWelcome = async () => {
@@ -103,34 +89,19 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setDisclaimerAccepted(true);
   };
 
-  const setDisplayName = async (name: string) => {
-    if (!user) return;
-    const updated = await api.registerUser(user.deviceId, name);
-    setUser(updated);
-  };
-
-  // First-launch name entry -- saves the name and, unlike a later rename
-  // from Home, also marks the gate as passed so the app doesn't ask again.
-  const completeUsername = async (name: string) => {
-    await setDisplayName(name);
-    await AsyncStorage.setItem(USERNAME_KEY, "true");
-    setUsernameChosen(true);
-  };
-
   return (
     <UserContext.Provider
       value={{
         user,
         loading,
-        error,
         welcomeSeen,
         disclaimerAccepted,
-        usernameChosen,
         completeWelcome,
         acceptDisclaimer,
-        completeUsername,
+        register,
+        login,
         setDisplayName,
-        retry,
+        logOut,
       }}
     >
       {children}

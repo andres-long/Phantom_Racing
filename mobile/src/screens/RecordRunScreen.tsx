@@ -19,7 +19,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
 type TracePoint = LatLng & { t: number };
 
 export default function RecordRunScreen({ route, navigation }: Props) {
-  const { segmentId } = route.params;
+  const { segmentId, autoStart } = route.params;
   const { user } = useUser();
 
   const [segment, setSegment] = useState<SegmentSummary | null>(null);
@@ -41,6 +41,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const startTimeRef = useRef<number>(0);
   const finishedRef = useRef(false);
   const maxSpeedRef = useRef(0);
+  const autoStartTriggeredRef = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -149,7 +150,38 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     );
   };
 
+  // Auto-detected races (jumped here straight from the map because you were
+  // clearly driving right at a track's start) begin timing immediately --
+  // no need to also tap "Start run". Guarded to fire once, right after the
+  // segment finishes loading.
+  useEffect(() => {
+    if (!loading && segment && autoStart && !autoStartTriggeredRef.current) {
+      autoStartTriggeredRef.current = true;
+      startRun();
+    }
+  }, [loading, segment]);
+
   const stopRun = () => finishRun(trace);
+
+  const onCancel = () => {
+    if (recording) {
+      Alert.alert("Cancel this run?", "Your progress won't be saved.", [
+        { text: "Keep racing", style: "cancel" },
+        {
+          text: "Cancel run",
+          style: "destructive",
+          onPress: () => {
+            finishedRef.current = true;
+            subscriptionRef.current?.remove();
+            subscriptionRef.current = null;
+            navigation.goBack();
+          },
+        },
+      ]);
+    } else {
+      navigation.goBack();
+    }
+  };
 
   if (loading || !segment) {
     return (
@@ -191,8 +223,13 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         )}
       </MapView>
 
+      <Pressable style={styles.cancelButton} onPress={onCancel} hitSlop={10}>
+        <Text style={styles.cancelText}>x</Text>
+      </Pressable>
+
       <View style={styles.hud}>
         <Text style={styles.segmentName}>{segment.name}</Text>
+        {autoStart && <Text style={styles.autoBadge}>Auto-detected -- racing started automatically</Text>}
         <Text style={styles.time}>{formatDuration(elapsedMs)}</Text>
         {ghost ? (
           deltaMs != null && (
@@ -228,6 +265,18 @@ export default function RecordRunScreen({ route, navigation }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0f" },
   centered: { flex: 1, backgroundColor: "#0b0b0f", alignItems: "center", justifyContent: "center" },
+  cancelButton: {
+    position: "absolute",
+    top: 50,
+    left: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#000000cc",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cancelText: { color: "#fff", fontSize: 16, fontWeight: "800" },
   hud: {
     position: "absolute",
     top: 60,
@@ -238,6 +287,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
   },
   segmentName: { color: "#8e8e96", fontSize: 13, textAlign: "center", marginBottom: 4 },
+  autoBadge: { color: "#34d058", fontSize: 11, fontWeight: "700", textAlign: "center", marginBottom: 4 },
   time: { color: "#fff", fontSize: 40, fontWeight: "800", textAlign: "center" },
   delta: { fontSize: 16, fontWeight: "700", textAlign: "center", marginTop: 4 },
   noGhost: { color: "#8e8e96", fontSize: 13, textAlign: "center", marginTop: 4 },

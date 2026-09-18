@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import * as Location from "expo-location";
@@ -7,7 +7,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, SegmentSummary, LatLng } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
-import { cumulativeDistances, projectOntoPolyline, pointAtDistance } from "../utils/geo";
+import { cumulativeDistances, projectOntoPolyline, pointAtDistance, haversine } from "../utils/geo";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
@@ -15,6 +15,13 @@ type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 // count as "nearby" and show up on the live map. 5km covers "the road I'm
 // about to drive" without cluttering the map with the whole city.
 const NEARBY_RADIUS_M = 5000;
+
+// Auto-detect racing: if you're moving at least this fast, you're clearly
+// driving (not walking or stopped), and if you're within this many meters
+// of a track's start line at that moment, jump straight into timing that
+// track -- no need to open its card and tap "Race it" first.
+const AUTO_START_SPEED_KMH = 15;
+const AUTO_START_RADIUS_M = 45;
 
 const FALLBACK_REGION: Region = {
   latitude: 14.6349,
@@ -62,6 +69,7 @@ export default function HomeScreen({ navigation }: Props) {
     useCallback(() => {
       loadSegments();
       let cancelled = false;
+      let autoStarted = false;
 
       (async () => {
         const { status } = await Location.requestForegroundPermissionsAsync();
@@ -71,7 +79,21 @@ export default function HomeScreen({ navigation }: Props) {
           (loc) => {
             const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
             setUserPos(pos);
-            setSpeedKmh(Math.max(0, (loc.coords.speed ?? 0) * 3.6));
+            const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
+            setSpeedKmh(currentSpeedKmh);
+
+            // Guarded to fire at most once per visit to this screen, so it
+            // can't re-trigger every second while sitting still right at a
+            // start line -- only an actual approach at driving speed counts.
+            if (!autoStarted && currentSpeedKmh >= AUTO_START_SPEED_KMH) {
+              const candidate = nearbyRef.current.find(
+                (s) => s.points.length >= 2 && haversine(pos, s.points[0]) <= AUTO_START_RADIUS_M
+              );
+              if (candidate) {
+                autoStarted = true;
+                navigation.navigate("RecordRun", { segmentId: candidate.id, autoStart: true });
+              }
+            }
           }
         );
       })();
@@ -81,7 +103,7 @@ export default function HomeScreen({ navigation }: Props) {
         subscriptionRef.current?.remove();
         subscriptionRef.current = null;
       };
-    }, [loadSegments])
+    }, [loadSegments, navigation])
   );
 
   // Center the map on the user once, the first time a GPS fix comes in --
@@ -107,6 +129,16 @@ export default function HomeScreen({ navigation }: Props) {
       .filter((s) => s.distanceM <= NEARBY_RADIUS_M)
       .sort((a, b) => a.distanceM - b.distanceM);
   }, [segments, userPos]);
+
+  // The GPS watcher above lives inside useFocusEffect and only sets up its
+  // subscription once per focus -- it can't close over a fresh `nearby` on
+  // every render the way the JSX below does. This ref keeps it reading the
+  // latest nearby-segments list without having to tear down and restart the
+  // location subscription whenever that list changes.
+  const nearbyRef = useRef<NearbySegment[]>([]);
+  useEffect(() => {
+    nearbyRef.current = nearby;
+  }, [nearby]);
 
   const selected = nearby.find((s) => s.id === selectedId) ?? null;
 

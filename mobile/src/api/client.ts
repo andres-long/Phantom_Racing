@@ -26,10 +26,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  registerUser: (deviceId: string, displayName: string) =>
-    request<User>("/api/users", {
+  // Creates a real account (racer name + password) so it -- and everything
+  // tied to it -- can be logged back into from any device.
+  register: (displayName: string, password: string) =>
+    request<User>("/api/auth/register", {
       method: "POST",
-      body: JSON.stringify({ deviceId, displayName }),
+      body: JSON.stringify({ displayName, password }),
+    }),
+
+  login: (displayName: string, password: string) =>
+    request<User>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ displayName, password }),
+    }),
+
+  updateDisplayName: (deviceId: string, displayName: string) =>
+    request<User>(`/api/users/${deviceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ displayName }),
     }),
 
   listSegments: () => request<SegmentSummary[]>("/api/segments"),

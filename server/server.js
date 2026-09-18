@@ -13,6 +13,7 @@
 
 const http = require("http");
 const { URL } = require("url");
+const crypto = require("crypto");
 const db = require("./db");
 const geo = require("./geo");
 
@@ -54,6 +55,34 @@ function findUserByDevice(dbState, deviceId) {
   return dbState.users.find((u) => u.deviceId === deviceId);
 }
 
+function findUserByName(dbState, displayName) {
+  const lower = displayName.toLowerCase();
+  return dbState.users.find((u) => u.displayName.toLowerCase() === lower);
+}
+
+// Password hashing via Node's built-in crypto (scrypt) -- no extra
+// dependency needed, keeping with this backend's zero-dependency design.
+// Stored as "<salt>:<hash>", both hex.
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored) return false;
+  const [salt, hash] = stored.split(":");
+  if (!salt || !hash) return false;
+  const hashBuffer = Buffer.from(hash, "hex");
+  const testHash = crypto.scryptSync(password, salt, 64);
+  return testHash.length === hashBuffer.length && crypto.timingSafeEqual(testHash, hashBuffer);
+}
+
+// The subset of a user record that's safe to send to the client --
+// never the password hash.
+function publicUser(user) {
+  return { id: user.id, deviceId: user.deviceId, displayName: user.displayName, createdAt: user.createdAt };
+}
 
 // A run whose average speed is not physically plausible -- either an
 // absurd absolute speed, or higher than the phone's own recorded top
@@ -199,28 +228,74 @@ route("GET", "/api/health", async ({ res }) => {
   sendJson(res, 200, { ok: true, time: new Date().toISOString() });
 });
 
-// Create or fetch a user by device id. No real auth in the MVP -- a phone's
-// generated device id is the identity.
-route("POST", "/api/users", async ({ res, body }) => {
-  const { deviceId, displayName } = body;
-  if (!deviceId) return sendJson(res, 400, { error: "deviceId is required" });
+// Create a real account: a racer name + password, so it (and everything
+// tied to it -- leaderboard history, segments you've created) can be logged
+// back into from any device, not just the one you signed up on. If the name
+// belongs to an existing account that has no password yet (from before
+// accounts existed), this claims it instead of erroring, so nothing about
+// that history is lost.
+route("POST", "/api/auth/register", async ({ res, body }) => {
+  const name = (body.displayName || "").trim();
+  const password = body.password || "";
+  if (!name) return sendJson(res, 400, { error: "Pick a racer name." });
+  if (password.length < 4) return sendJson(res, 400, { error: "Password must be at least 4 characters." });
 
   const state = await db.load();
-  let user = findUserByDevice(state, deviceId);
-  if (!user) {
+  const existing = findUserByName(state, name);
+
+  let user;
+  if (existing && existing.passwordHash) {
+    return sendJson(res, 409, { error: "That name is already taken. Try logging in, or pick a different name." });
+  } else if (existing) {
+    existing.passwordHash = hashPassword(password);
+    user = existing;
+  } else {
     user = {
       id: db.id("user"),
-      deviceId,
-      displayName: displayName || "Racer",
+      deviceId: db.id("device"),
+      displayName: name,
+      passwordHash: hashPassword(password),
       createdAt: new Date().toISOString(),
     };
     state.users.push(user);
-    await db.save(state);
-  } else if (displayName && displayName !== user.displayName) {
-    user.displayName = displayName;
-    await db.save(state);
   }
-  sendJson(res, 200, user);
+  await db.save(state);
+  sendJson(res, 200, publicUser(user));
+});
+
+// Log in from any device with a racer name + password, to pick up that
+// account's saved name and leaderboard history here.
+route("POST", "/api/auth/login", async ({ res, body }) => {
+  const name = (body.displayName || "").trim();
+  const password = body.password || "";
+  if (!name || !password) return sendJson(res, 400, { error: "Name and password are required." });
+
+  const state = await db.load();
+  const user = findUserByName(state, name);
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    return sendJson(res, 401, { error: "Incorrect name or password." });
+  }
+  sendJson(res, 200, publicUser(user));
+});
+
+// Rename an already-signed-in account. No password needed -- you're
+// already authenticated by having this device's saved account.
+route("PATCH", "/api/users/:deviceId", async ({ res, params, body }) => {
+  const name = (body.displayName || "").trim();
+  if (!name) return sendJson(res, 400, { error: "Pick a racer name." });
+
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found." });
+
+  const clash = findUserByName(state, name);
+  if (clash && clash.id !== user.id) {
+    return sendJson(res, 409, { error: "That name is taken." });
+  }
+
+  user.displayName = name;
+  await db.save(state);
+  sendJson(res, 200, publicUser(user));
 });
 
 // List all segments with a leaderboard summary.

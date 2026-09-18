@@ -70,7 +70,7 @@ export type RootStackParamList = {
   Home: undefined;
   AllSegments: undefined;
   CreateSegment: undefined;
-  RecordRun: { segmentId: string };
+  RecordRun: { segmentId: string; autoStart?: boolean };
   RunSummary: { result: SubmitRunResponse; segmentName: string; segmentId: string };
   Leaderboard: { segmentId: string; segmentName: string };
 };

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-nati
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import * as Location from "expo-location";
 import { useFocusEffect } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, SegmentSummary, LatLng } from "../types";
 import { api } from "../api/client";
@@ -40,6 +41,7 @@ type NearbySegment = SegmentSummary & { distanceM: number };
 // (the "All tracks" button), since that's a secondary, occasional action.
 export default function HomeScreen({ navigation }: Props) {
   const { user } = useUser();
+  const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
 
@@ -201,7 +203,7 @@ export default function HomeScreen({ navigation }: Props) {
         })}
       </MapView>
 
-      <View style={styles.topBar}>
+      <View style={[styles.topBar, { top: insets.top + 10 }]}>
         <Pressable onPress={() => navigation.navigate("Username")} hitSlop={8} style={styles.topBarLeft}>
           <Text style={styles.topBarName} numberOfLines={1}>
             {user ? `${user.displayName} >` : "Connecting..."}
@@ -216,7 +218,7 @@ export default function HomeScreen({ navigation }: Props) {
       </View>
 
       {error && (
-        <View style={styles.errorBox}>
+        <View style={[styles.errorBox, { top: insets.top + 56 }]}>
           <Text style={styles.errorText}>{error}</Text>
         </View>
       )}
@@ -285,7 +287,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   topBar: {
     position: "absolute",
-    top: 50,
     left: 16,
     right: 16,
     flexDirection: "row",
@@ -307,7 +308,6 @@ const styles = StyleSheet.create({
   topBarButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "700", letterSpacing: 0.5 },
   errorBox: {
     position: "absolute",
-    top: 96,
     left: 16,
     right: 16,
     backgroundColor: "#2a1414ee",

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Alert, ActivityIndicator } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, SegmentSummary, GhostProfileResponse, LatLng } from "../types";
 import { api } from "../api/client";
@@ -23,6 +24,7 @@ type TracePoint = LatLng & { t: number };
 export default function RecordRunScreen({ route, navigation }: Props) {
   const { segmentId, autoStart } = route.params;
   const { user } = useUser();
+  const insets = useSafeAreaInsets();
 
   const [segment, setSegment] = useState<SegmentSummary | null>(null);
   const [ghost, setGhost] = useState<GhostProfileResponse | null>(null);
@@ -237,11 +239,11 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         )}
       </MapView>
 
-      <Pressable style={styles.cancelButton} onPress={onCancel} hitSlop={10}>
+      <Pressable style={[styles.cancelButton, { top: insets.top + 10 }]} onPress={onCancel} hitSlop={10}>
         <Text style={styles.cancelText}>x</Text>
       </Pressable>
 
-      <View style={styles.hud}>
+      <View style={[styles.hud, { top: insets.top + 20 }]}>
         <Text style={styles.segmentName}>{segment.name}</Text>
         {autoStart && <Text style={styles.autoBadge}>AUTO-DETECTED -- RACING STARTED AUTOMATICALLY</Text>}
         <Text style={styles.time}>{formatDuration(elapsedMs)}</Text>
@@ -279,7 +281,6 @@ const styles = StyleSheet.create({
   centered: { flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" },
   cancelButton: {
     position: "absolute",
-    top: 50,
     left: 16,
     width: 36,
     height: 36,
@@ -293,7 +294,6 @@ const styles = StyleSheet.create({
   cancelText: { color: colors.cyan, fontSize: 16, fontWeight: "800" },
   hud: {
     position: "absolute",
-    top: 60,
     left: 20,
     right: 20,
     ...panelStyle,

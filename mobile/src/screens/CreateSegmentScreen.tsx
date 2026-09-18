@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, TextInput, Alert } from "react-native";
 import MapView, { Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, LatLng } from "../types";
 import { api } from "../api/client";
@@ -20,6 +21,7 @@ type TracePoint = LatLng & { t: number };
 // leaderboard instead of having to drive the same road again.
 export default function CreateSegmentScreen({ navigation }: Props) {
   const { user } = useUser();
+  const insets = useSafeAreaInsets();
   const [recording, setRecording] = useState(false);
   const [trace, setTrace] = useState<TracePoint[]>([]);
   const [speedKmh, setSpeedKmh] = useState(0);
@@ -136,7 +138,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         )}
       </MapView>
 
-      <View style={styles.hud}>
+      <View style={[styles.hud, { top: insets.top + 20 }]}>
         <Text style={styles.hudText}>
           {recording ? `RECORDING -- ${Math.round(polylineLength(trace))}m` : "NOT RECORDING"}
         </Text>
@@ -178,7 +180,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  hud: { position: "absolute", top: 60, left: 20, right: 20, ...panelStyle, padding: 14 },
+  hud: { position: "absolute", left: 20, right: 20, ...panelStyle, padding: 14 },
   hudText: { color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 13, textAlign: "center", letterSpacing: 1 },
   speedText: { color: colors.cyan, fontFamily: fonts.display, fontSize: 20, textAlign: "center", marginTop: 6 },
   trackingHint: { color: colors.textSecondary, fontSize: 11, textAlign: "center", marginTop: 6 },

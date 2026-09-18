@@ -1,5 +1,6 @@
 import React from "react";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useFonts, Orbitron_500Medium, Orbitron_700Bold, Orbitron_900Black } from "@expo-google-fonts/orbitron";
 import { UserProvider } from "./src/context/UserContext";
@@ -27,10 +28,12 @@ export default function App() {
   }
 
   return (
-    <UserProvider>
-      <StatusBar style="light" />
-      <AppNavigator />
-    </UserProvider>
+    <SafeAreaProvider>
+      <UserProvider>
+        <StatusBar style="light" />
+        <AppNavigator />
+      </UserProvider>
+    </SafeAreaProvider>
   );
 }
 

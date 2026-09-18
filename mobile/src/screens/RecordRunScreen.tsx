@@ -18,13 +18,14 @@ import {
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
+import VehicleMarker from "../components/VehicleMarker";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
 type TracePoint = LatLng & { t: number };
 
 export default function RecordRunScreen({ route, navigation }: Props) {
   const { segmentId, autoStart } = route.params;
-  const { user } = useUser();
+  const { user, vehicleStyle } = useUser();
   const insets = useSafeAreaInsets();
 
   const [segment, setSegment] = useState<SegmentSummary | null>(null);
@@ -34,6 +35,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const [recording, setRecording] = useState(false);
   const [trace, setTrace] = useState<TracePoint[]>([]);
   const [myPos, setMyPos] = useState<LatLng | null>(null);
+  const [heading, setHeading] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [deltaMs, setDeltaMs] = useState<number | null>(null);
   const [speedKmh, setSpeedKmh] = useState(0);
@@ -73,6 +75,27 @@ export default function RecordRunScreen({ route, navigation }: Props) {
       subscriptionRef.current?.remove();
     };
   }, [segmentId]);
+
+  // A one-off fix so the vehicle marker has somewhere to sit before you tap
+  // "Start run" -- the live watcher below only runs once recording begins.
+  // Best-effort: if permission isn't granted yet, startRun's own check
+  // handles that when you actually try to race.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (status !== "granted") return;
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setMyPos({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+        if (loc.coords.heading != null && loc.coords.heading >= 0) {
+          setHeading(loc.coords.heading);
+        }
+      } catch {
+        // No initial fix available -- the marker just won't show until
+        // recording starts, which is fine.
+      }
+    })();
+  }, []);
 
   const finishRun = async (finalTrace: TracePoint[]) => {
     if (finishedRef.current) return;
@@ -124,6 +147,9 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           t: Date.now(),
         };
         setMyPos(point);
+        if (loc.coords.heading != null && loc.coords.heading >= 0) {
+          setHeading(loc.coords.heading);
+        }
         // This watcher only runs while a run is actively being recorded (it's
         // created in startRun and torn down in finishRun), so it's safe to
         // just always keep the map centered on you here -- no separate
@@ -219,7 +245,6 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        showsUserLocation
         initialRegion={{
           latitude: segment.points[0].lat,
           longitude: segment.points[0].lng,
@@ -232,6 +257,17 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           strokeColor={colors.cyan}
           strokeWidth={4}
         />
+        {myPos && (
+          <Marker
+            coordinate={{ latitude: myPos.lat, longitude: myPos.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            rotation={heading}
+            flat
+            tracksViewChanges={false}
+          >
+            <VehicleMarker vehicleStyle={vehicleStyle} />
+          </Marker>
+        )}
         {ghostMarker && (
           <Marker
             coordinate={{ latitude: ghostMarker.lat, longitude: ghostMarker.lng }}

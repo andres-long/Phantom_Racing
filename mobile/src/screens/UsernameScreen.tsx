@@ -1,11 +1,12 @@
 import React, { useState } from "react";
-import { View, Text, StyleSheet, TextInput, KeyboardAvoidingView, Platform, Alert } from "react-native";
+import { View, Text, StyleSheet, TextInput, KeyboardAvoidingView, Platform, Alert, Pressable } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
 import { useUser } from "../context/UserContext";
-import { colors, fonts } from "../theme";
+import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
 import NeonButton from "../components/NeonButton";
+import VehicleMarker, { VEHICLE_STYLES, VehicleStyle } from "../components/VehicleMarker";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Username">;
 
@@ -118,7 +119,7 @@ function AuthForm() {
 }
 
 function AccountView({ navigation }: { navigation: Props["navigation"] }) {
-  const { user, setDisplayName, logOut } = useUser();
+  const { user, setDisplayName, logOut, vehicleStyle, setVehicleStyle } = useUser();
   const [name, setName] = useState(user?.displayName ?? "");
   const [saving, setSaving] = useState(false);
 
@@ -177,6 +178,25 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
           disabled={saving}
           style={styles.submitButton}
         />
+
+        <Text style={styles.sectionLabel}>MAP MARKER</Text>
+        <Text style={styles.subtitle}>What marks your position on the map while you drive.</Text>
+        <View style={styles.vehicleRow}>
+          {VEHICLE_STYLES.map((v) => {
+            const selected = v.key === vehicleStyle;
+            return (
+              <Pressable
+                key={v.key}
+                onPress={() => setVehicleStyle(v.key)}
+                style={[styles.vehicleOption, selected && styles.vehicleOptionSelected]}
+              >
+                <VehicleMarker vehicleStyle={v.key} size={40} />
+                <Text style={[styles.vehicleLabel, selected && styles.vehicleLabelSelected]}>{v.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         <NeonButton label="LOG OUT" onPress={onLogOut} variant="ghost" style={styles.logOutButton} />
       </View>
     </KeyboardAvoidingView>
@@ -200,5 +220,32 @@ const styles = StyleSheet.create({
   },
   submitButton: { marginTop: 4 },
   switchModeButton: { marginTop: 16 },
-  logOutButton: { marginTop: 16 },
+  logOutButton: { marginTop: 24 },
+  sectionLabel: {
+    color: colors.textSecondary,
+    fontFamily: fonts.heading,
+    fontSize: 12,
+    letterSpacing: 1.5,
+    marginTop: 28,
+    marginBottom: 6,
+  },
+  vehicleRow: { flexDirection: "row", gap: 10, marginTop: 4 },
+  vehicleOption: {
+    flex: 1,
+    ...panelStyle,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  vehicleOptionSelected: {
+    borderColor: colors.cyan,
+    backgroundColor: colors.cyanDim,
+  },
+  vehicleLabel: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    marginTop: 6,
+  },
+  vehicleLabelSelected: { color: colors.cyan },
 });

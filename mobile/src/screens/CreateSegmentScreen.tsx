@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, TextInput, Alert } from "react-native";
-import MapView, { Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -11,6 +11,7 @@ import { polylineLength } from "../utils/geo";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
+import VehicleMarker from "../components/VehicleMarker";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
 type TracePoint = LatLng & { t: number };
@@ -21,10 +22,12 @@ type TracePoint = LatLng & { t: number };
 // auto-submits it as that segment's first run -- you land straight on the
 // leaderboard instead of having to drive the same road again.
 export default function CreateSegmentScreen({ navigation }: Props) {
-  const { user } = useUser();
+  const { user, vehicleStyle } = useUser();
   const insets = useSafeAreaInsets();
   const [recording, setRecording] = useState(false);
   const [trace, setTrace] = useState<TracePoint[]>([]);
+  const [myPos, setMyPos] = useState<LatLng | null>(null);
+  const [heading, setHeading] = useState(0);
   const [speedKmh, setSpeedKmh] = useState(0);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
@@ -38,6 +41,18 @@ export default function CreateSegmentScreen({ navigation }: Props) {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         Alert.alert("Location permission needed", "This app can't record a route without location access.");
+        return;
+      }
+      // A one-off fix so the vehicle marker has somewhere to sit before you
+      // start recording -- the live watcher only runs while recording.
+      try {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setMyPos({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+        if (loc.coords.heading != null && loc.coords.heading >= 0) {
+          setHeading(loc.coords.heading);
+        }
+      } catch {
+        // No initial fix -- the marker just won't show until recording starts.
       }
     })();
     return () => {
@@ -55,6 +70,10 @@ export default function CreateSegmentScreen({ navigation }: Props) {
       (loc) => {
         const point = { lat: loc.coords.latitude, lng: loc.coords.longitude, t: Date.now() };
         setTrace((prev) => [...prev, point]);
+        setMyPos(point);
+        if (loc.coords.heading != null && loc.coords.heading >= 0) {
+          setHeading(loc.coords.heading);
+        }
         const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
         setSpeedKmh(currentSpeedKmh);
         if (currentSpeedKmh > maxSpeedRef.current) {
@@ -123,10 +142,9 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        showsUserLocation
         initialRegion={{
-          latitude: trace[0]?.lat ?? 14.6349,
-          longitude: trace[0]?.lng ?? -90.5069,
+          latitude: trace[0]?.lat ?? myPos?.lat ?? 14.6349,
+          longitude: trace[0]?.lng ?? myPos?.lng ?? -90.5069,
           latitudeDelta: 0.02,
           longitudeDelta: 0.02,
         }}
@@ -137,6 +155,17 @@ export default function CreateSegmentScreen({ navigation }: Props) {
             strokeColor={colors.cyan}
             strokeWidth={5}
           />
+        )}
+        {myPos && (
+          <Marker
+            coordinate={{ latitude: myPos.lat, longitude: myPos.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            rotation={heading}
+            flat
+            tracksViewChanges={false}
+          >
+            <VehicleMarker vehicleStyle={vehicleStyle} />
+          </Marker>
         )}
       </MapView>
 

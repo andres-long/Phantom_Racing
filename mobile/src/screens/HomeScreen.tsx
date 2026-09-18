@@ -12,6 +12,7 @@ import { cumulativeDistances, projectOntoPolyline, pointAtDistance, haversine } 
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
+import VehicleMarker from "../components/VehicleMarker";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
@@ -41,13 +42,14 @@ type NearbySegment = SegmentSummary & { distanceM: number };
 // Browsing the full list of every track ever recorded lives one tap away
 // (the "All tracks" button), since that's a secondary, occasional action.
 export default function HomeScreen({ navigation }: Props) {
-  const { user } = useUser();
+  const { user, vehicleStyle } = useUser();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
 
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
   const [userPos, setUserPos] = useState<LatLng | null>(null);
+  const [heading, setHeading] = useState(0);
   const [speedKmh, setSpeedKmh] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +94,13 @@ export default function HomeScreen({ navigation }: Props) {
           (loc) => {
             const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
             setUserPos(pos);
+            // heading is -1 (or null on some devices) when the compass
+            // reading isn't reliable yet, e.g. standing still -- keep
+            // pointing the last known direction instead of snapping to
+            // north.
+            if (loc.coords.heading != null && loc.coords.heading >= 0) {
+              setHeading(loc.coords.heading);
+            }
             const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
             setSpeedKmh(currentSpeedKmh);
 
@@ -169,13 +178,23 @@ export default function HomeScreen({ navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        showsUserLocation
         initialRegion={FALLBACK_REGION}
         onPress={() => setSelectedId(null)}
         onPanDrag={() => {
           followRef.current = false;
         }}
       >
+        {userPos && (
+          <Marker
+            coordinate={{ latitude: userPos.lat, longitude: userPos.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            rotation={heading}
+            flat
+            tracksViewChanges={false}
+          >
+            <VehicleMarker vehicleStyle={vehicleStyle} />
+          </Marker>
+        )}
         {nearby.map((s) => {
           const cumDist = cumulativeDistances(s.points);
           const mid = pointAtDistance(s.points, cumDist, cumDist[cumDist.length - 1] / 2);

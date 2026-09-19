@@ -10,6 +10,8 @@ import {
   PlaceDetails,
   DirectionsResponse,
   SubmitTripResponse,
+  PresenceUser,
+  MapBounds,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -120,4 +122,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ deviceId, destinationName, destination, trace, maxSpeedKmh, estimatedDurationS }),
     }),
+
+  // Live presence -- "who else is using the app right now, and where."
+  // sendHeartbeat is fire-and-forget from the caller's point of view (Home
+  // screen swallows failures so a dropped heartbeat never surfaces as an
+  // error to the driver); queryPresence takes the current visible map
+  // region so the same call naturally covers "who's near me" and "who's
+  // over there" after panning.
+  sendHeartbeat: (deviceId: string, position: LatLng, heading: number | null, incognito: boolean) =>
+    request<{ ok: true }>("/api/presence", {
+      method: "POST",
+      body: JSON.stringify({ deviceId, lat: position.lat, lng: position.lng, heading, incognito }),
+    }),
+
+  queryPresence: (deviceId: string, bounds: MapBounds) =>
+    request<{ users: PresenceUser[] }>(
+      `/api/presence?deviceId=${encodeURIComponent(deviceId)}&north=${bounds.north}&south=${bounds.south}&east=${bounds.east}&west=${bounds.west}`
+    ),
 };

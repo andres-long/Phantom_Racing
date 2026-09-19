@@ -93,6 +93,19 @@ export type SubmitTripResponse = {
   deltaMs: number | null;
 };
 
+// ---- Live presence (other users on the map) --------------------------
+
+export type PresenceUser = {
+  deviceId: string;
+  displayName: string;
+  lat: number;
+  lng: number;
+  heading: number | null;
+  updatedAt: string;
+};
+
+export type MapBounds = { north: number; south: number; east: number; west: number };
+
 // Root navigator param list.
 export type RootStackParamList = {
   Welcome: undefined;

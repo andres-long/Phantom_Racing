@@ -672,6 +672,75 @@ route("GET", "/api/users/:deviceId/trips", async ({ res, params }) => {
   sendJson(res, 200, trips);
 });
 
+// A presence record older than this is treated as "not online" and dropped
+// from query results -- the mobile app heartbeats roughly every 5s while
+// foregrounded, so this gives room for one missed beat (a brief network
+// blip) without the marker flickering out, while still going stale quickly
+// once someone actually backgrounds/closes the app.
+const PRESENCE_MAX_AGE_MS = 25000;
+
+// Heartbeat: "I'm here, at this location, right now." Called repeatedly
+// (not once) by any signed-in device while the app is foregrounded, per the
+// chosen visibility model -- your marker is live to others for as long as
+// heartbeats keep arriving, and simply times out (see PRESENCE_MAX_AGE_MS)
+// once they stop, whether that's backgrounding the app, losing signal, or
+// force-closing it. No separate start/stop call needed.
+route("POST", "/api/presence", async ({ res, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  if (!deviceId) return sendJson(res, 400, { error: "Missing deviceId." });
+  const lat = Number(body.lat);
+  const lng = Number(body.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return sendJson(res, 400, { error: "Missing or invalid lat/lng." });
+  }
+
+  // Looked up fresh each heartbeat (not cached client-side) so a rename
+  // shows up to everyone else within one heartbeat interval.
+  const state = await db.load();
+  const user = findUserByDevice(state, deviceId);
+  if (!user) return sendJson(res, 404, { error: "Unknown device." });
+
+  const headingNum = Number(body.heading);
+  await db.upsertPresence({
+    deviceId,
+    displayName: user.displayName,
+    lat,
+    lng,
+    heading: Number.isFinite(headingNum) ? headingNum : null,
+    // Incognito is enforced here, not by the client simply not calling this
+    // route -- that way flipping the toggle back off doesn't need to wait
+    // out a stale timeout, and flipping it on hides you the moment the next
+    // heartbeat lands rather than up to PRESENCE_MAX_AGE_MS later.
+    incognito: !!body.incognito,
+    updatedAt: new Date().toISOString(),
+  });
+  sendJson(res, 200, { ok: true });
+});
+
+// Who else is online right now, optionally within a map viewport. Bounds
+// are optional so a caller could ask for "everyone" (e.g. a future admin
+// view), but the mobile app always sends the current visible region -- that
+// single query naturally covers both "who's near me" (initial region,
+// centered on the device) and "who's over there" (after panning/zooming
+// elsewhere), per how this was scoped.
+route("GET", "/api/presence", async ({ res, query }) => {
+  const deviceId = (query.get("deviceId") || "").trim();
+  if (!deviceId) return sendJson(res, 400, { error: "Missing deviceId." });
+
+  const north = Number(query.get("north"));
+  const south = Number(query.get("south"));
+  const east = Number(query.get("east"));
+  const west = Number(query.get("west"));
+  const bounds = [north, south, east, west].every(Number.isFinite) ? { north, south, east, west } : null;
+
+  const users = await db.queryPresence({
+    excludeDeviceId: deviceId,
+    bounds,
+    maxAgeMs: PRESENCE_MAX_AGE_MS,
+  });
+  sendJson(res, 200, { users });
+});
+
 const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {

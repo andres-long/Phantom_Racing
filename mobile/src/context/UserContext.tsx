@@ -10,12 +10,14 @@ type UserContextValue = {
   welcomeSeen: boolean;
   disclaimerAccepted: boolean;
   vehicleStyle: VehicleStyle;
+  incognito: boolean;
   completeWelcome: () => Promise<void>;
   acceptDisclaimer: () => Promise<void>;
   register: (name: string, password: string) => Promise<void>;
   login: (name: string, password: string) => Promise<void>;
   setDisplayName: (name: string) => Promise<void>;
   setVehicleStyle: (style: VehicleStyle) => Promise<void>;
+  setIncognito: (value: boolean) => Promise<void>;
   logOut: () => Promise<void>;
 };
 
@@ -25,6 +27,12 @@ const ACCOUNT_KEY = "nfs.account";
 const WELCOME_KEY = "nfs.welcomeSeen";
 const DISCLAIMER_KEY = "nfs.disclaimerAccepted";
 const VEHICLE_STYLE_KEY = "nfs.vehicleStyle";
+// Whether your live location is hidden from other users on the map (see
+// HomeScreen's presence heartbeat/query). Local per-device preference, same
+// as vehicleStyle -- there's no server-side "account setting" for it, just
+// an `incognito` flag sent along with every heartbeat, so toggling it takes
+// effect on the very next heartbeat rather than needing a round trip.
+const INCOGNITO_KEY = "nfs.incognito";
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -35,6 +43,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   // per-device preference (like welcomeSeen/disclaimerAccepted above), not
   // something synced to the account on the backend.
   const [vehicleStyle, setVehicleStyleState] = useState<VehicleStyle>("jet");
+  const [incognito, setIncognitoState] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -46,6 +55,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       if (savedVehicleStyle === "jet" || savedVehicleStyle === "arrow" || savedVehicleStyle === "bike") {
         setVehicleStyleState(savedVehicleStyle);
       }
+      const savedIncognito = (await AsyncStorage.getItem(INCOGNITO_KEY)) === "true";
+      setIncognitoState(savedIncognito);
 
       // A signed-in account, saved locally after register/login, so the
       // app doesn't ask again on every launch -- only a fresh install (or
@@ -106,6 +117,11 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setVehicleStyleState(style);
   };
 
+  const setIncognito = async (value: boolean) => {
+    await AsyncStorage.setItem(INCOGNITO_KEY, value ? "true" : "false");
+    setIncognitoState(value);
+  };
+
   return (
     <UserContext.Provider
       value={{
@@ -114,12 +130,14 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         welcomeSeen,
         disclaimerAccepted,
         vehicleStyle,
+        incognito,
         completeWelcome,
         acceptDisclaimer,
         register,
         login,
         setDisplayName,
         setVehicleStyle,
+        setIncognito,
         logOut,
       }}
     >

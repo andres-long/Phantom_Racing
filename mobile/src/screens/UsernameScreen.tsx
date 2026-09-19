@@ -1,5 +1,15 @@
 import React, { useState } from "react";
-import { View, Text, StyleSheet, TextInput, KeyboardAvoidingView, Platform, Alert, Pressable } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+  Pressable,
+  Switch,
+} from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
 import { useUser } from "../context/UserContext";
@@ -119,7 +129,7 @@ function AuthForm() {
 }
 
 function AccountView({ navigation }: { navigation: Props["navigation"] }) {
-  const { user, setDisplayName, logOut, vehicleStyle, setVehicleStyle } = useUser();
+  const { user, setDisplayName, logOut, vehicleStyle, setVehicleStyle, incognito, setIncognito } = useUser();
   const [name, setName] = useState(user?.displayName ?? "");
   const [saving, setSaving] = useState(false);
 
@@ -197,6 +207,28 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
           })}
         </View>
 
+        <Text style={styles.sectionLabel}>LIVE LOCATION</Text>
+        <Text style={styles.subtitle}>
+          While this is on, other racers can see your username and live position on the map
+          whenever you have the app open. Turn on incognito to hide yourself -- you'll still see
+          everyone else.
+        </Text>
+        <View style={styles.incognitoRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.incognitoLabel}>Incognito mode</Text>
+            <Text style={styles.incognitoHint}>
+              {incognito ? "You're hidden from other racers right now." : "Your position is visible to other racers."}
+            </Text>
+          </View>
+          <Switch
+            value={incognito}
+            onValueChange={setIncognito}
+            trackColor={{ false: colors.panelBorder, true: colors.racePrimaryDim }}
+            thumbColor={incognito ? colors.racePrimary : colors.textMuted}
+            ios_backgroundColor={colors.panelBorder}
+          />
+        </View>
+
         <NeonButton label="LOG OUT" onPress={onLogOut} variant="ghost" style={styles.logOutButton} />
       </View>
     </KeyboardAvoidingView>
@@ -248,4 +280,13 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   vehicleLabelSelected: { color: colors.cyan },
+  incognitoRow: {
+    ...panelStyle,
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    marginTop: 4,
+  },
+  incognitoLabel: { color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
+  incognitoHint: { color: colors.textSecondary, fontSize: 12, marginTop: 3 },
 });

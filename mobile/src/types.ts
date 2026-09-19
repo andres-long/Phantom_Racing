@@ -62,6 +62,37 @@ export type User = {
   createdAt: string;
 };
 
+// ---- "Go To a place" (destination search + turn-by-turn + tracked trip) --
+
+export type PlacePrediction = { placeId: string; description: string };
+
+export type PlaceDetails = {
+  placeId: string;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+};
+
+export type DirectionsResponse = {
+  points: LatLng[];
+  distanceM: number;
+  durationS: number;
+  durationInTrafficS: number | null;
+  endAddress: string;
+};
+
+export type SubmitTripResponse = {
+  tripId: string;
+  destinationName: string;
+  durationMs: number;
+  distanceM: number;
+  avgSpeedKmh: number;
+  maxSpeedKmh: number;
+  estimatedDurationMs: number | null;
+  deltaMs: number | null;
+};
+
 // Root navigator param list.
 export type RootStackParamList = {
   Welcome: undefined;
@@ -73,4 +104,13 @@ export type RootStackParamList = {
   RecordRun: { segmentId: string; autoStart?: boolean };
   RunSummary: { result: SubmitRunResponse; segmentName: string; segmentId: string };
   Leaderboard: { segmentId: string; segmentName: string };
+  GoTo: undefined;
+  GoRace: {
+    destinationName: string;
+    destination: LatLng;
+    route: LatLng[];
+    distanceM: number;
+    durationS: number;
+  };
+  GoSummary: { result: SubmitTripResponse };
 };

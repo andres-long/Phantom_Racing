@@ -22,7 +22,7 @@ const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || "need_for_speed";
 const STATE_DOC_ID = "state";
 
 function emptyState() {
-  return { users: [], segments: [], runs: [] };
+  return { users: [], segments: [], runs: [], trips: [] };
 }
 
 // ---- JSON-file backend (local dev / no MONGODB_URI set) -------------------
@@ -33,7 +33,11 @@ function loadLocal() {
   }
   const raw = fs.readFileSync(DB_PATH, "utf8");
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    // Older db.json files (written before trips existed) won't have the
+    // field -- default it rather than letting every trips route crash on
+    // an undefined array.
+    return { ...emptyState(), ...parsed };
   } catch (e) {
     return emptyState();
   }
@@ -71,14 +75,19 @@ async function loadMongo() {
   const db = await getMongoDb();
   const doc = await db.collection("appState").findOne({ _id: STATE_DOC_ID });
   if (!doc) return emptyState();
-  return { users: doc.users || [], segments: doc.segments || [], runs: doc.runs || [] };
+  return {
+    users: doc.users || [],
+    segments: doc.segments || [],
+    runs: doc.runs || [],
+    trips: doc.trips || [],
+  };
 }
 
 async function saveMongo(state) {
   const db = await getMongoDb();
   await db.collection("appState").updateOne(
     { _id: STATE_DOC_ID },
-    { $set: { users: state.users, segments: state.segments, runs: state.runs } },
+    { $set: { users: state.users, segments: state.segments, runs: state.runs, trips: state.trips || [] } },
     { upsert: true }
   );
 }

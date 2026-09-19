@@ -6,6 +6,10 @@ import { useFonts, Orbitron_500Medium, Orbitron_700Bold, Orbitron_900Black } fro
 import { UserProvider } from "./src/context/UserContext";
 import AppNavigator from "./src/navigation/AppNavigator";
 import { colors } from "./src/theme";
+// Registers the background-location TaskManager task (see the file for
+// why this has to happen at module scope) as soon as the JS bundle loads --
+// this import is the only thing this file needs from it.
+import "./src/backgroundLocation";
 
 export default function App() {
   // The Orbitron display font (headings, buttons, HUD numbers) has to

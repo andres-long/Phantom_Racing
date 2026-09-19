@@ -12,6 +12,13 @@ import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
 import VehicleMarker from "../components/VehicleMarker";
+import {
+  BackgroundLocationPoint,
+  requestBackgroundLocationPermission,
+  setBackgroundLocationListener,
+  startBackgroundTracking,
+  stopBackgroundTracking,
+} from "../backgroundLocation";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
 type TracePoint = LatLng & { t: number };
@@ -32,7 +39,6 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const maxSpeedRef = useRef(0);
   const mapRef = useRef<MapView | null>(null);
 
@@ -56,43 +62,53 @@ export default function CreateSegmentScreen({ navigation }: Props) {
       }
     })();
     return () => {
-      subscriptionRef.current?.remove();
+      stopBackgroundTracking();
     };
   }, []);
 
+  // Fed by the background-capable location task (see ../backgroundLocation)
+  // instead of a plain watchPositionAsync subscription, so recording keeps
+  // going if you lock the phone or switch apps mid-recording -- previously
+  // this stopped the instant the app left the foreground.
+  const handleLocationPoints = (points: BackgroundLocationPoint[]) => {
+    if (points.length === 0) return;
+    const newPoints: TracePoint[] = points.map((p) => ({ lat: p.lat, lng: p.lng, t: p.t }));
+    setTrace((prev) => [...prev, ...newPoints]);
+
+    const last = points[points.length - 1];
+    setMyPos({ lat: last.lat, lng: last.lng });
+    if (last.heading != null) setHeading(last.heading);
+    setSpeedKmh(last.speedKmh);
+    if (last.speedKmh > maxSpeedRef.current) {
+      maxSpeedRef.current = last.speedKmh;
+    }
+    // Keep the map following you the whole recording, same as an actual
+    // race -- otherwise the view stays wherever it opened and the road
+    // you're drawing quickly runs off screen.
+    mapRef.current?.animateToRegion(
+      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
+      500
+    );
+  };
+
   const startRecording = async () => {
+    const bgGranted = await requestBackgroundLocationPermission();
+    if (!bgGranted) {
+      Alert.alert(
+        "Background location not granted",
+        'Recording will pause if you lock your phone or leave the app mid-recording. For uninterrupted recording, allow location access "All the time" in Settings.'
+      );
+    }
     setTrace([]);
     setSpeedKmh(0);
     maxSpeedRef.current = 0;
     setRecording(true);
-    subscriptionRef.current = await Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 5 },
-      (loc) => {
-        const point = { lat: loc.coords.latitude, lng: loc.coords.longitude, t: Date.now() };
-        setTrace((prev) => [...prev, point]);
-        setMyPos(point);
-        if (loc.coords.heading != null && loc.coords.heading >= 0) {
-          setHeading(loc.coords.heading);
-        }
-        const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
-        setSpeedKmh(currentSpeedKmh);
-        if (currentSpeedKmh > maxSpeedRef.current) {
-          maxSpeedRef.current = currentSpeedKmh;
-        }
-        // Keep the map following you the whole recording, same as an actual
-        // race -- otherwise the view stays wherever it opened and the road
-        // you're drawing quickly runs off screen.
-        mapRef.current?.animateToRegion(
-          { latitude: point.lat, longitude: point.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
-          500
-        );
-      }
-    );
+    setBackgroundLocationListener(handleLocationPoints);
+    await startBackgroundTracking("Recording a new road segment. Tap to return to Phantom Racing.");
   };
 
   const stopRecording = () => {
-    subscriptionRef.current?.remove();
-    subscriptionRef.current = null;
+    stopBackgroundTracking();
     setRecording(false);
     if (trace.length < 2) {
       Alert.alert("Too short", "Record a bit more road before stopping.");

@@ -300,6 +300,7 @@ export default function HomeScreen({ navigation }: Props) {
         onPress={() => navigation.navigate("CreateSegment")}
         style={styles.fab}
       />
+      <NeonButton label="GO TO..." onPress={() => navigation.navigate("GoTo")} style={styles.fabRight} />
     </View>
   );
 }
@@ -397,6 +398,12 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 24,
     left: 20,
+    width: "44%",
+  },
+  fabRight: {
+    position: "absolute",
+    bottom: 24,
+    right: 20,
     width: "44%",
   },
 });

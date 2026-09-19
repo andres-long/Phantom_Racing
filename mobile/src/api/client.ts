@@ -5,6 +5,11 @@ import {
   GhostProfileResponse,
   SubmitRunResponse,
   User,
+  LatLng,
+  PlacePrediction,
+  PlaceDetails,
+  DirectionsResponse,
+  SubmitTripResponse,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -85,4 +90,34 @@ export const api = {
     }),
 
   getUserRuns: (deviceId: string) => request<any[]>(`/api/users/${deviceId}/runs`),
+
+  // "Go to a place" -- destination search (Places), routing (Directions),
+  // and submitting the resulting drive as a tracked trip.
+  placesAutocomplete: (query: string, near?: LatLng) =>
+    request<{ predictions: PlacePrediction[] }>(
+      `/api/places/autocomplete?query=${encodeURIComponent(query)}${
+        near ? `&lat=${near.lat}&lng=${near.lng}` : ""
+      }`
+    ),
+
+  placeDetails: (placeId: string) =>
+    request<PlaceDetails>(`/api/places/details?placeId=${encodeURIComponent(placeId)}`),
+
+  getDirections: (origin: LatLng, destination: LatLng) =>
+    request<DirectionsResponse>(
+      `/api/directions?originLat=${origin.lat}&originLng=${origin.lng}&destLat=${destination.lat}&destLng=${destination.lng}`
+    ),
+
+  submitTrip: (
+    deviceId: string,
+    destinationName: string,
+    destination: LatLng,
+    trace: { lat: number; lng: number; t: number }[],
+    maxSpeedKmh: number,
+    estimatedDurationS: number | null
+  ) =>
+    request<SubmitTripResponse>("/api/trips", {
+      method: "POST",
+      body: JSON.stringify({ deviceId, destinationName, destination, trace, maxSpeedKmh, estimatedDurationS }),
+    }),
 };

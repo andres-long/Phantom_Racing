@@ -9,14 +9,19 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.example.needforspeedstreets",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "This app needs your location to time your runs along road segments."
+        "NSLocationWhenInUseUsageDescription": "This app needs your location to time your runs along road segments.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Phantom Racing keeps recording your run in the background if you lock your phone or switch apps mid-drive.",
+        "UIBackgroundModes": ["location"]
       }
     },
     "android": {
       "package": "com.example.needforspeedstreets",
       "permissions": [
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
       ],
       "config": {
         "googleMaps": {
@@ -26,7 +31,16 @@
     },
     "plugins": [
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Phantom Racing keeps recording your run in the background if you lock your phone or switch apps mid-drive.",
+          "locationWhenInUsePermission": "This app needs your location to time your runs along road segments.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
     ],
     "extra": {
       "eas": {

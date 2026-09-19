@@ -19,6 +19,13 @@ import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
 import VehicleMarker from "../components/VehicleMarker";
+import {
+  BackgroundLocationPoint,
+  requestBackgroundLocationPermission,
+  setBackgroundLocationListener,
+  startBackgroundTracking,
+  stopBackgroundTracking,
+} from "../backgroundLocation";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
 type TracePoint = LatLng & { t: number };
@@ -44,7 +51,6 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const [submitting, setSubmitting] = useState(false);
 
   const mapRef = useRef<MapView | null>(null);
-  const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const cumDistRef = useRef<number[]>([]);
   const startTimeRef = useRef<number>(0);
   const finishedRef = useRef(false);
@@ -72,7 +78,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
       }
     })();
     return () => {
-      subscriptionRef.current?.remove();
+      stopBackgroundTracking();
     };
   }, [segmentId]);
 
@@ -100,8 +106,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const finishRun = async (finalTrace: TracePoint[]) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    subscriptionRef.current?.remove();
-    subscriptionRef.current = null;
+    await stopBackgroundTracking();
     setRecording(false);
 
     if (!user || !segment) {
@@ -123,12 +128,66 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     }
   };
 
+  // Fed by the background-capable location task (see ../backgroundLocation)
+  // instead of a plain watchPositionAsync subscription, so recording keeps
+  // going if you lock the phone or switch apps mid-run. A batch can contain
+  // more than one point (e.g. after a brief background gap); every point
+  // goes into the trace for accurate timing/leaderboard math, while the
+  // marker/HUD just reflect the most recent one.
+  const handleLocationPoints = (points: BackgroundLocationPoint[]) => {
+    if (!segment || points.length === 0) return;
+    const newPoints: TracePoint[] = points.map((p) => ({ lat: p.lat, lng: p.lng, t: p.t }));
+    const last = points[points.length - 1];
+
+    setMyPos({ lat: last.lat, lng: last.lng });
+    if (last.heading != null) setHeading(last.heading);
+    mapRef.current?.animateToRegion(
+      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
+      500
+    );
+    setSpeedKmh(last.speedKmh);
+    if (last.speedKmh > maxSpeedRef.current) {
+      maxSpeedRef.current = last.speedKmh;
+      setMaxSpeedKmh(last.speedKmh);
+    }
+
+    setTrace((prev) => {
+      const next = [...prev, ...newPoints];
+
+      const cumDist = cumDistRef.current;
+      const totalLength = cumDist[cumDist.length - 1] ?? 0;
+      const lastPoint = newPoints[newPoints.length - 1];
+      const { distanceAlongM } = projectOntoPolyline(segment.points, cumDist, lastPoint);
+      const elapsed = lastPoint.t - startTimeRef.current;
+      setElapsedMs(elapsed);
+      setProgress(totalLength > 0 ? Math.min(1, distanceAlongM / totalLength) : 0);
+
+      if (ghost) {
+        const ghostElapsed = ghostElapsedAtDistance(ghost.profile, distanceAlongM);
+        if (ghostElapsed != null) setDeltaMs(ghostElapsed - elapsed);
+      }
+
+      // Auto-finish once we're essentially at the end of the segment.
+      if (totalLength > 0 && distanceAlongM >= totalLength * 0.98 && elapsed >= 3000 && next.length >= 3) {
+        finishRun(next);
+      }
+      return next;
+    });
+  };
+
   const startRun = async () => {
     if (!segment) return;
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
       Alert.alert("Location permission needed", "Can't time a run without location access.");
       return;
+    }
+    const bgGranted = await requestBackgroundLocationPermission();
+    if (!bgGranted) {
+      Alert.alert(
+        "Background location not granted",
+        'Recording will pause if you lock your phone or leave the app mid-run. For uninterrupted recording, allow location access "All the time" in Settings.'
+      );
     }
 
     finishedRef.current = false;
@@ -138,58 +197,8 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     startTimeRef.current = Date.now();
     setRecording(true);
 
-    subscriptionRef.current = await Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 500, distanceInterval: 3 },
-      (loc) => {
-        const point: TracePoint = {
-          lat: loc.coords.latitude,
-          lng: loc.coords.longitude,
-          t: Date.now(),
-        };
-        setMyPos(point);
-        if (loc.coords.heading != null && loc.coords.heading >= 0) {
-          setHeading(loc.coords.heading);
-        }
-        // This watcher only runs while a run is actively being recorded (it's
-        // created in startRun and torn down in finishRun), so it's safe to
-        // just always keep the map centered on you here -- no separate
-        // "recording" check needed. Without this the map stayed frozen on
-        // wherever it opened, and your position marker drove itself off
-        // screen within a few seconds.
-        mapRef.current?.animateToRegion(
-          { latitude: point.lat, longitude: point.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
-          500
-        );
-        const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
-        setSpeedKmh(currentSpeedKmh);
-        if (currentSpeedKmh > maxSpeedRef.current) {
-          maxSpeedRef.current = currentSpeedKmh;
-          setMaxSpeedKmh(currentSpeedKmh);
-        }
-
-        setTrace((prev) => {
-          const next = [...prev, point];
-
-          const cumDist = cumDistRef.current;
-          const totalLength = cumDist[cumDist.length - 1] ?? 0;
-          const { distanceAlongM } = projectOntoPolyline(segment.points, cumDist, point);
-          const elapsed = point.t - startTimeRef.current;
-          setElapsedMs(elapsed);
-          setProgress(totalLength > 0 ? Math.min(1, distanceAlongM / totalLength) : 0);
-
-          if (ghost) {
-            const ghostElapsed = ghostElapsedAtDistance(ghost.profile, distanceAlongM);
-            if (ghostElapsed != null) setDeltaMs(ghostElapsed - elapsed);
-          }
-
-          // Auto-finish once we're essentially at the end of the segment.
-      if (totalLength > 0 && distanceAlongM >= totalLength * 0.98 && elapsed >= 3000 && next.length >= 3) {
-            finishRun(next);
-          }
-          return next;
-        });
-      }
-    );
+    setBackgroundLocationListener(handleLocationPoints);
+    await startBackgroundTracking(`Timing your run on ${segment.name}. Tap to return to Phantom Racing.`);
   };
 
   // Auto-detected races (jumped here straight from the map because you were
@@ -214,8 +223,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           style: "destructive",
           onPress: () => {
             finishedRef.current = true;
-            subscriptionRef.current?.remove();
-            subscriptionRef.current = null;
+            stopBackgroundTracking();
             navigation.goBack();
           },
         },

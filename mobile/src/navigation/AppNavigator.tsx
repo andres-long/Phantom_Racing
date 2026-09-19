@@ -14,6 +14,9 @@ import CreateSegmentScreen from "../screens/CreateSegmentScreen";
 import RecordRunScreen from "../screens/RecordRunScreen";
 import RunSummaryScreen from "../screens/RunSummaryScreen";
 import LeaderboardScreen from "../screens/LeaderboardScreen";
+import GoToScreen from "../screens/GoToScreen";
+import GoRaceScreen from "../screens/GoRaceScreen";
+import GoSummaryScreen from "../screens/GoSummaryScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -76,6 +79,9 @@ export default function AppNavigator() {
             <Stack.Screen name="CreateSegment" component={CreateSegmentScreen} />
             <Stack.Screen name="RecordRun" component={RecordRunScreen} />
             <Stack.Screen name="RunSummary" component={RunSummaryScreen} />
+            <Stack.Screen name="GoTo" component={GoToScreen} />
+            <Stack.Screen name="GoRace" component={GoRaceScreen} />
+            <Stack.Screen name="GoSummary" component={GoSummaryScreen} />
             <Stack.Screen
               name="Username"
               component={UsernameScreen}

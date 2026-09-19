@@ -12,11 +12,42 @@
 // this server computes.
 
 const http = require("http");
+const https = require("https");
 const { URL } = require("url");
+const crypto = require("crypto");
 const db = require("./db");
 const geo = require("./geo");
 
 const PORT = process.env.PORT || 4000;
+
+// A server-side-only Google Maps Platform key (Places + Directions APIs
+// enabled, no app/referrer restriction since it's never shipped to a
+// client) -- distinct from the key baked into the mobile app, which only
+// has the Maps SDK enabled. Set as an env var on the deployed host; local
+// dev without it just gets a clear "not configured" error from the routes
+// that need it instead of a confusing Google API failure.
+const GOOGLE_SERVER_API_KEY = process.env.GOOGLE_SERVER_API_KEY;
+
+// Minimal HTTPS GET-JSON helper, built on Node's own `https` (no axios/
+// node-fetch) to keep this backend's zero-dependency design -- used only
+// for the handful of Google Places/Directions calls below.
+function httpsGetJson(url) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, (res) => {
+        let raw = "";
+        res.on("data", (chunk) => (raw += chunk));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(raw));
+          } catch (e) {
+            reject(new Error("Bad response from Google"));
+          }
+        });
+      })
+      .on("error", reject);
+  });
+}
 
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
@@ -52,6 +83,115 @@ function readBody(req) {
 
 function findUserByDevice(dbState, deviceId) {
   return dbState.users.find((u) => u.deviceId === deviceId);
+}
+
+function findUserByName(dbState, displayName) {
+  const lower = displayName.toLowerCase();
+  return dbState.users.find((u) => u.displayName.toLowerCase() === lower);
+}
+
+// Password hashing via Node's built-in crypto (scrypt) -- no extra
+// dependency needed, keeping with this backend's zero-dependency design.
+// Stored as "<salt>:<hash>", both hex.
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored) return false;
+  const [salt, hash] = stored.split(":");
+  if (!salt || !hash) return false;
+  const hashBuffer = Buffer.from(hash, "hex");
+  const testHash = crypto.scryptSync(password, salt, 64);
+  return testHash.length === hashBuffer.length && crypto.timingSafeEqual(testHash, hashBuffer);
+}
+
+// The subset of a user record that's safe to send to the client --
+// never the password hash.
+function publicUser(user) {
+  return { id: user.id, deviceId: user.deviceId, displayName: user.displayName, createdAt: user.createdAt };
+}
+
+// A run whose average speed is not physically plausible -- either an
+// absurd absolute speed, or higher than the phone's own recorded top
+// speed for that same run (average can never exceed max) -- almost
+// certainly means the GPS trace was mismatched onto the segment (e.g.
+// the live position momentarily projected near the segment's far end)
+// rather than a real drive. Used both to reject new submissions and to
+// clean out any that already slipped through.
+function isImplausibleRun(avgSpeedKmh, maxSpeedKmh) {
+  return avgSpeedKmh > 300 || (maxSpeedKmh > 0 && avgSpeedKmh > maxSpeedKmh * 1.2);
+}
+
+// Validates a GPS trace against a segment and, if it checks out, times it
+// and stores it as a run. Shared by the dedicated "submit a run" endpoint
+// and by segment creation (the drive that just defined the segment is
+// itself a full lap of it, so it's auto-submitted as that segment's first
+// run). Returns { run, error } -- run is a plain submit-run-response object
+// on success, or null with `error` set to why it didn't count. The caller
+// decides whether that should fail the whole request (submitting a run:
+// yes) or just be reported alongside an otherwise-successful save
+// (creating a segment: no -- the segment is kept either way).
+function tryCreateRun(state, segment, user, cleanTrace, maxSpeedKmh) {
+  const segCumDist = geo.cumulativeDistances(segment.points);
+  const validation = geo.validateRunAgainstSegment(segment.points, segCumDist, cleanTrace);
+  if (!validation.valid) {
+    return { run: null, error: validation.reason };
+  }
+
+  const durationMs = cleanTrace[cleanTrace.length - 1].t - cleanTrace[0].t;
+  if (!(durationMs > 0)) {
+    return { run: null, error: "Invalid trace timestamps." };
+  }
+  const avgSpeedKmh = (segment.lengthM / 1000) / (durationMs / 3_600_000);
+
+  // Client-reported top speed, from the phone's GPS speed sensor. Sanity
+  // checked (not just trusted) since GPS speed can spike from noise or a
+  // spoofed value: must be a finite, non-negative number, and clamped to a
+  // generous but real-world ceiling.
+  const rawMaxSpeed = Number(maxSpeedKmh);
+  const safeMaxSpeedKmh =
+    Number.isFinite(rawMaxSpeed) && rawMaxSpeed > 0 ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0;
+
+  const roundedAvg = Math.round(avgSpeedKmh * 10) / 10;
+  if (isImplausibleRun(roundedAvg, safeMaxSpeedKmh)) {
+    return {
+      run: null,
+      error: "This run's average speed isn't physically plausible for this segment -- not counted.",
+    };
+  }
+
+  const run = {
+    id: db.id("run"),
+    segmentId: segment.id,
+    userId: user.id,
+    durationMs,
+    avgSpeedKmh: roundedAvg,
+    maxSpeedKmh: safeMaxSpeedKmh,
+    trace: cleanTrace,
+    recordedAt: new Date().toISOString(),
+  };
+  state.runs.push(run);
+
+  const allRuns = state.runs
+    .filter((r) => r.segmentId === segment.id)
+    .sort((a, b) => a.durationMs - b.durationMs);
+  const rank = allRuns.findIndex((r) => r.id === run.id) + 1;
+
+  return {
+    run: {
+      runId: run.id,
+      durationMs: run.durationMs,
+      avgSpeedKmh: run.avgSpeedKmh,
+      maxSpeedKmh: run.maxSpeedKmh,
+      rank,
+      totalRuns: allRuns.length,
+      isNewRecord: rank === 1,
+    },
+    error: null,
+  };
 }
 
 function segmentSummary(dbState, segment) {
@@ -118,28 +258,74 @@ route("GET", "/api/health", async ({ res }) => {
   sendJson(res, 200, { ok: true, time: new Date().toISOString() });
 });
 
-// Create or fetch a user by device id. No real auth in the MVP -- a phone's
-// generated device id is the identity.
-route("POST", "/api/users", async ({ res, body }) => {
-  const { deviceId, displayName } = body;
-  if (!deviceId) return sendJson(res, 400, { error: "deviceId is required" });
+// Create a real account: a racer name + password, so it (and everything
+// tied to it -- leaderboard history, segments you've created) can be logged
+// back into from any device, not just the one you signed up on. If the name
+// belongs to an existing account that has no password yet (from before
+// accounts existed), this claims it instead of erroring, so nothing about
+// that history is lost.
+route("POST", "/api/auth/register", async ({ res, body }) => {
+  const name = (body.displayName || "").trim();
+  const password = body.password || "";
+  if (!name) return sendJson(res, 400, { error: "Pick a racer name." });
+  if (password.length < 4) return sendJson(res, 400, { error: "Password must be at least 4 characters." });
 
   const state = await db.load();
-  let user = findUserByDevice(state, deviceId);
-  if (!user) {
+  const existing = findUserByName(state, name);
+
+  let user;
+  if (existing && existing.passwordHash) {
+    return sendJson(res, 409, { error: "That name is already taken. Try logging in, or pick a different name." });
+  } else if (existing) {
+    existing.passwordHash = hashPassword(password);
+    user = existing;
+  } else {
     user = {
       id: db.id("user"),
-      deviceId,
-      displayName: displayName || "Racer",
+      deviceId: db.id("device"),
+      displayName: name,
+      passwordHash: hashPassword(password),
       createdAt: new Date().toISOString(),
     };
     state.users.push(user);
-    await db.save(state);
-  } else if (displayName && displayName !== user.displayName) {
-    user.displayName = displayName;
-    await db.save(state);
   }
-  sendJson(res, 200, user);
+  await db.save(state);
+  sendJson(res, 200, publicUser(user));
+});
+
+// Log in from any device with a racer name + password, to pick up that
+// account's saved name and leaderboard history here.
+route("POST", "/api/auth/login", async ({ res, body }) => {
+  const name = (body.displayName || "").trim();
+  const password = body.password || "";
+  if (!name || !password) return sendJson(res, 400, { error: "Name and password are required." });
+
+  const state = await db.load();
+  const user = findUserByName(state, name);
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    return sendJson(res, 401, { error: "Incorrect name or password." });
+  }
+  sendJson(res, 200, publicUser(user));
+});
+
+// Rename an already-signed-in account. No password needed -- you're
+// already authenticated by having this device's saved account.
+route("PATCH", "/api/users/:deviceId", async ({ res, params, body }) => {
+  const name = (body.displayName || "").trim();
+  if (!name) return sendJson(res, 400, { error: "Pick a racer name." });
+
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found." });
+
+  const clash = findUserByName(state, name);
+  if (clash && clash.id !== user.id) {
+    return sendJson(res, 409, { error: "That name is taken." });
+  }
+
+  user.displayName = name;
+  await db.save(state);
+  sendJson(res, 200, publicUser(user));
 });
 
 // List all segments with a leaderboard summary.
@@ -152,19 +338,28 @@ route("GET", "/api/segments", async ({ res }) => {
   );
 });
 
-// Create a new segment from a recorded polyline.
+// Create a new segment from a recorded polyline. The trace that defines the
+// segment is a full lap of it, so it's auto-submitted as that segment's
+// first timed run (see tryCreateRun) -- the response carries both the
+// segment and (if the trace was a valid, plausible run) that first run.
 route("POST", "/api/segments", async ({ res, body }) => {
-  const { name, points, deviceId } = body;
-  if (!name || !Array.isArray(points) || points.length < 2) {
+  const { name, trace, deviceId, maxSpeedKmh } = body;
+  if (!name || !Array.isArray(trace) || trace.length < 2) {
     return sendJson(res, 400, {
-      error: "name and at least 2 {lat,lng} points are required",
+      error: "name and a trace of at least 2 {lat,lng,t} points are required",
     });
   }
   const state = await db.load();
   const creator = findUserByDevice(state, deviceId);
   if (!creator) return sendJson(res, 400, { error: "Unknown deviceId; register the user first." });
 
-  const cleanPoints = points.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }));
+  const cleanTrace = trace.map((p) => ({
+    lat: Number(p.lat),
+    lng: Number(p.lng),
+    t: Number(p.t),
+  }));
+  const cleanPoints = cleanTrace.map((p) => ({ lat: p.lat, lng: p.lng }));
+
   const segment = {
     id: db.id("seg"),
     name,
@@ -174,8 +369,11 @@ route("POST", "/api/segments", async ({ res, body }) => {
     createdAt: new Date().toISOString(),
   };
   state.segments.push(segment);
+
+  const { run, error: runError } = tryCreateRun(state, segment, creator, cleanTrace, maxSpeedKmh);
+
   await db.save(state);
-  sendJson(res, 201, segmentSummary(state, segment));
+  sendJson(res, 201, { ...segmentSummary(state, segment), run, runError: run ? null : runError });
 });
 
 route("GET", "/api/segments/:id", async ({ res, params }) => {
@@ -230,53 +428,12 @@ route("POST", "/api/segments/:id/runs", async ({ res, params, body }) => {
     t: Number(p.t),
   }));
 
-  const segCumDist = geo.cumulativeDistances(segment.points);
-  const validation = geo.validateRunAgainstSegment(segment.points, segCumDist, cleanTrace);
-  if (!validation.valid) {
-    return sendJson(res, 422, { error: validation.reason });
+  const { run, error } = tryCreateRun(state, segment, user, cleanTrace, maxSpeedKmh);
+  if (!run) {
+    return sendJson(res, 422, { error });
   }
-
-  const durationMs = cleanTrace[cleanTrace.length - 1].t - cleanTrace[0].t;
-  if (!(durationMs > 0)) {
-    return sendJson(res, 422, { error: "Invalid trace timestamps." });
-  }
-  const avgSpeedKmh = (segment.lengthM / 1000) / (durationMs / 3_600_000);
-
-  // Client-reported top speed, from the phone's GPS speed sensor. Sanity
-  // checked (not just trusted) since GPS speed can spike from noise or a
-  // spoofed value: must be a finite, non-negative number, and clamped to a
-  // generous but real-world ceiling.
-  const rawMaxSpeed = Number(maxSpeedKmh);
-  const safeMaxSpeedKmh =
-    Number.isFinite(rawMaxSpeed) && rawMaxSpeed > 0 ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0;
-
-  const run = {
-    id: db.id("run"),
-    segmentId: segment.id,
-    userId: user.id,
-    durationMs,
-    avgSpeedKmh: Math.round(avgSpeedKmh * 10) / 10,
-    maxSpeedKmh: safeMaxSpeedKmh,
-    trace: cleanTrace,
-    recordedAt: new Date().toISOString(),
-  };
-  state.runs.push(run);
   await db.save(state);
-
-  const allRuns = state.runs
-    .filter((r) => r.segmentId === segment.id)
-    .sort((a, b) => a.durationMs - b.durationMs);
-  const rank = allRuns.findIndex((r) => r.id === run.id) + 1;
-
-  sendJson(res, 201, {
-    runId: run.id,
-    durationMs: run.durationMs,
-    avgSpeedKmh: run.avgSpeedKmh,
-    maxSpeedKmh: run.maxSpeedKmh,
-    rank,
-    totalRuns: allRuns.length,
-    isNewRecord: rank === 1,
-  });
+  sendJson(res, 201, run);
 });
 
 // The current leaderboard leader's run, packaged as a "ghost profile" the
@@ -323,6 +480,196 @@ route("GET", "/api/users/:deviceId/runs", async ({ res, params }) => {
       recordedAt: r.recordedAt,
     }));
   sendJson(res, 200, runs);
+});
+
+// ---- Go To a place: Places search + Directions routing + trip tracking ----
+//
+// These three routes back the "search a destination, see the route/ETA,
+// then drive it" feature. All three proxy Google's REST APIs server-side
+// (never exposing GOOGLE_SERVER_API_KEY to the app) -- see the comment on
+// that constant above.
+
+route("GET", "/api/places/autocomplete", async ({ res, query }) => {
+  const input = (query.get("query") || "").trim();
+  if (!input) return sendJson(res, 200, { predictions: [] });
+  if (!GOOGLE_SERVER_API_KEY) {
+    return sendJson(res, 500, { error: "Destination search isn't configured on the server yet." });
+  }
+  const lat = query.get("lat");
+  const lng = query.get("lng");
+  // Bias (not restrict) results toward wherever the phone currently is, so
+  // "mcdonalds" finds the nearby one first instead of one in another city.
+  const locationBias = lat && lng ? `&location=${lat},${lng}&radius=30000` : "";
+  try {
+    const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(
+      input
+    )}${locationBias}&key=${GOOGLE_SERVER_API_KEY}`;
+    const data = await httpsGetJson(url);
+    if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+      return sendJson(res, 502, { error: data.error_message || `Destination search failed (${data.status})` });
+    }
+    sendJson(res, 200, {
+      predictions: (data.predictions || []).map((p) => ({ placeId: p.place_id, description: p.description })),
+    });
+  } catch (e) {
+    sendJson(res, 502, { error: "Couldn't reach the destination search service." });
+  }
+});
+
+route("GET", "/api/places/details", async ({ res, query }) => {
+  const placeId = query.get("placeId");
+  if (!placeId) return sendJson(res, 400, { error: "placeId is required" });
+  if (!GOOGLE_SERVER_API_KEY) {
+    return sendJson(res, 500, { error: "Destination search isn't configured on the server yet." });
+  }
+  try {
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(
+      placeId
+    )}&fields=name,formatted_address,geometry&key=${GOOGLE_SERVER_API_KEY}`;
+    const data = await httpsGetJson(url);
+    if (data.status !== "OK") {
+      return sendJson(res, 422, { error: data.error_message || `Couldn't look up that place (${data.status})` });
+    }
+    const r = data.result;
+    sendJson(res, 200, {
+      placeId,
+      name: r.name,
+      address: r.formatted_address,
+      lat: r.geometry.location.lat,
+      lng: r.geometry.location.lng,
+    });
+  } catch (e) {
+    sendJson(res, 502, { error: "Couldn't reach the destination search service." });
+  }
+});
+
+// Driving route + ETA between two points, used both for the initial preview
+// (before you tap "Start") and for live rerouting when you stray off the
+// planned route.
+route("GET", "/api/directions", async ({ res, query }) => {
+  const originLat = Number(query.get("originLat"));
+  const originLng = Number(query.get("originLng"));
+  const destLat = Number(query.get("destLat"));
+  const destLng = Number(query.get("destLng"));
+  if (![originLat, originLng, destLat, destLng].every(Number.isFinite)) {
+    return sendJson(res, 400, { error: "originLat, originLng, destLat, destLng are required" });
+  }
+  if (!GOOGLE_SERVER_API_KEY) {
+    return sendJson(res, 500, { error: "Routing isn't configured on the server yet." });
+  }
+  try {
+    const url =
+      `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}` +
+      `&destination=${destLat},${destLng}&mode=driving&key=${GOOGLE_SERVER_API_KEY}`;
+    const data = await httpsGetJson(url);
+    if (data.status !== "OK" || !data.routes || !data.routes.length) {
+      return sendJson(res, 422, { error: data.error_message || `No route found (${data.status})` });
+    }
+    const route0 = data.routes[0];
+    const leg = route0.legs[0];
+    const points = geo.decodePolyline(route0.overview_polyline.points);
+    sendJson(res, 200, {
+      points,
+      distanceM: leg.distance.value,
+      durationS: leg.duration.value,
+      durationInTrafficS: leg.duration_in_traffic ? leg.duration_in_traffic.value : null,
+      endAddress: leg.end_address,
+    });
+  } catch (e) {
+    sendJson(res, 502, { error: "Couldn't reach the routing service." });
+  }
+});
+
+// Submit a completed "go to" drive. Unlike segment runs, a trip's start
+// point is wherever you happened to be when you tapped Start (not a fixed,
+// shared start line), so there's no leaderboard here -- this is purely a
+// personal record of the drive, timed against the ETA Google gave you
+// beforehand.
+route("POST", "/api/trips", async ({ res, body }) => {
+  const { deviceId, destinationName, destination, trace, maxSpeedKmh, estimatedDurationS } = body;
+  if (
+    !deviceId ||
+    !destinationName ||
+    !destination ||
+    !Number.isFinite(Number(destination.lat)) ||
+    !Number.isFinite(Number(destination.lng)) ||
+    !Array.isArray(trace) ||
+    trace.length < 2
+  ) {
+    return sendJson(res, 400, {
+      error: "deviceId, destinationName, destination {lat,lng}, and a trace of at least 2 points are required",
+    });
+  }
+
+  const state = await db.load();
+  const user = findUserByDevice(state, deviceId);
+  if (!user) return sendJson(res, 400, { error: "Unknown deviceId; register the user first." });
+
+  const cleanTrace = trace.map((p) => ({ lat: Number(p.lat), lng: Number(p.lng), t: Number(p.t) }));
+  const durationMs = cleanTrace[cleanTrace.length - 1].t - cleanTrace[0].t;
+  if (!(durationMs > 0)) return sendJson(res, 400, { error: "Invalid trace timestamps." });
+
+  const distanceM = Math.round(geo.polylineLength(cleanTrace));
+  const avgSpeedKmh = Math.round((distanceM / 1000 / (durationMs / 3_600_000)) * 10) / 10;
+
+  const rawMaxSpeed = Number(maxSpeedKmh);
+  const safeMaxSpeedKmh =
+    Number.isFinite(rawMaxSpeed) && rawMaxSpeed > 0 ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0;
+
+  const rawEstimateS = Number(estimatedDurationS);
+  const estimatedDurationMs = Number.isFinite(rawEstimateS) && rawEstimateS > 0 ? rawEstimateS * 1000 : null;
+
+  const trip = {
+    id: db.id("trip"),
+    userId: user.id,
+    destinationName,
+    destinationLat: Number(destination.lat),
+    destinationLng: Number(destination.lng),
+    startLat: cleanTrace[0].lat,
+    startLng: cleanTrace[0].lng,
+    trace: cleanTrace,
+    durationMs,
+    distanceM,
+    avgSpeedKmh,
+    maxSpeedKmh: safeMaxSpeedKmh,
+    estimatedDurationMs,
+    recordedAt: new Date().toISOString(),
+  };
+  state.trips = state.trips || [];
+  state.trips.push(trip);
+  await db.save(state);
+
+  sendJson(res, 201, {
+    tripId: trip.id,
+    destinationName: trip.destinationName,
+    durationMs: trip.durationMs,
+    distanceM: trip.distanceM,
+    avgSpeedKmh: trip.avgSpeedKmh,
+    maxSpeedKmh: trip.maxSpeedKmh,
+    estimatedDurationMs: trip.estimatedDurationMs,
+    deltaMs: trip.estimatedDurationMs != null ? trip.durationMs - trip.estimatedDurationMs : null,
+  });
+});
+
+route("GET", "/api/users/:deviceId/trips", async ({ res, params }) => {
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found" });
+
+  const trips = (state.trips || [])
+    .filter((t) => t.userId === user.id)
+    .sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt))
+    .map((t) => ({
+      tripId: t.id,
+      destinationName: t.destinationName,
+      durationMs: t.durationMs,
+      distanceM: t.distanceM,
+      avgSpeedKmh: t.avgSpeedKmh,
+      maxSpeedKmh: t.maxSpeedKmh,
+      estimatedDurationMs: t.estimatedDurationMs,
+      recordedAt: t.recordedAt,
+    }));
+  sendJson(res, 200, trips);
 });
 
 const server = http.createServer((req, res) => {

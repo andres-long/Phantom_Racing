@@ -11,7 +11,9 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs your location to time your runs along road segments.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Phantom Racing keeps recording your run in the background if you lock your phone or switch apps mid-drive.",
-        "UIBackgroundModes": ["location"]
+        "UIBackgroundModes": [
+          "location"
+        ]
       }
     },
     "android": {
@@ -21,7 +23,8 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "FOREGROUND_SERVICE_LOCATION",
+        "RECORD_AUDIO"
       ],
       "config": {
         "googleMaps": {
@@ -39,6 +42,13 @@
           "locationWhenInUsePermission": "This app needs your location to time your runs along road segments.",
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Phantom Racing does not use your camera -- this is required by the voice library but never triggered.",
+          "microphonePermission": "Phantom Racing needs your microphone for push-to-talk voice with nearby racers."
         }
       ]
     ],

@@ -18,12 +18,13 @@ const crypto = require("crypto");
 
 const DB_PATH = path.join(__dirname, "data", "db.json");
 const PRESENCE_PATH = path.join(__dirname, "data", "presence.json");
+const VOICE_SIGNALS_PATH = path.join(__dirname, "data", "voiceSignals.json");
 const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || "need_for_speed";
 const STATE_DOC_ID = "state";
 
 function emptyState() {
-  return { users: [], segments: [], runs: [], trips: [], races: [], messages: [] };
+  return { users: [], segments: [], runs: [], trips: [], races: [], blocks: [] };
 }
 
 // ---- JSON-file backend (local dev / no MONGODB_URI set) -------------------
@@ -98,15 +99,63 @@ function matchesBounds(record, bounds) {
   return record.lng >= bounds.west || record.lng <= bounds.east;
 }
 
-function queryPresenceLocal({ excludeDeviceId, bounds, maxAgeMs }) {
+function queryPresenceLocal({ excludeDeviceId, bounds, maxAgeMs, requireVoiceEnabled }) {
   const map = loadPresenceLocal();
   const cutoff = Date.now() - maxAgeMs;
   return Object.values(map).filter((record) => {
     if (record.deviceId === excludeDeviceId) return false;
     if (record.incognito) return false;
+    // Older presence records (written before proximity voice existed) have
+    // no voiceEnabled field at all -- treat that as "on" (opt-out feature),
+    // same default the client itself uses.
+    if (requireVoiceEnabled && record.voiceEnabled === false) return false;
     if (new Date(record.updatedAt).getTime() < cutoff) return false;
     return matchesBounds(record, bounds);
   });
+}
+
+// ---- Proximity voice signaling (WebRTC offer/answer/ICE relay) ------------
+//
+// Same reasoning as presence's own separate store above, just more so: an
+// active call setup can produce several signals per second (an ICE
+// candidate each), and folding that into the read-whole/mutate/save-whole
+// `state` document would mean rewriting every user/segment/run/race/block on
+// every single ICE candidate. This is a pure mailbox -- push appends a
+// signal for its recipient, drain returns and *deletes* everything currently
+// waiting for one deviceId (a signal is meant to be read exactly once by
+// whichever device it's addressed to, not accumulated like presence or
+// races). No cross-device query, no "get everyone's", so no separate
+// bounds/radius logic is needed here at all.
+
+function loadVoiceSignalsLocal() {
+  if (!fs.existsSync(VOICE_SIGNALS_PATH)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(VOICE_SIGNALS_PATH, "utf8"));
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveVoiceSignalsLocal(map) {
+  fs.mkdirSync(path.dirname(VOICE_SIGNALS_PATH), { recursive: true });
+  fs.writeFileSync(VOICE_SIGNALS_PATH, JSON.stringify(map, null, 2));
+}
+
+function pushVoiceSignalLocal(signal) {
+  const map = loadVoiceSignalsLocal();
+  const list = map[signal.toDeviceId] || (map[signal.toDeviceId] = []);
+  list.push(signal);
+  saveVoiceSignalsLocal(map);
+}
+
+function drainVoiceSignalsLocal(toDeviceId) {
+  const map = loadVoiceSignalsLocal();
+  const list = map[toDeviceId] || [];
+  if (list.length > 0) {
+    delete map[toDeviceId];
+    saveVoiceSignalsLocal(map);
+  }
+  return list;
 }
 
 // ---- MongoDB backend (MONGODB_URI set, e.g. on a deployed host) -----------
@@ -142,7 +191,7 @@ async function loadMongo() {
     runs: doc.runs || [],
     trips: doc.trips || [],
     races: doc.races || [],
-    messages: doc.messages || [],
+    blocks: doc.blocks || [],
   };
 }
 
@@ -157,7 +206,7 @@ async function saveMongo(state) {
         runs: state.runs,
         trips: state.trips || [],
         races: state.races || [],
-        messages: state.messages || [],
+        blocks: state.blocks || [],
       },
     },
     { upsert: true }
@@ -174,7 +223,7 @@ async function upsertPresenceMongo(record) {
     .updateOne({ _id: record.deviceId }, { $set: { ...record } }, { upsert: true });
 }
 
-async function queryPresenceMongo({ excludeDeviceId, bounds, maxAgeMs }) {
+async function queryPresenceMongo({ excludeDeviceId, bounds, maxAgeMs, requireVoiceEnabled }) {
   const db = await getMongoDb();
   const cutoffIso = new Date(Date.now() - maxAgeMs).toISOString();
   const filter = {
@@ -182,6 +231,9 @@ async function queryPresenceMongo({ excludeDeviceId, bounds, maxAgeMs }) {
     incognito: { $ne: true },
     updatedAt: { $gte: cutoffIso },
   };
+  if (requireVoiceEnabled) {
+    filter.voiceEnabled = { $ne: false };
+  }
   if (bounds) {
     filter.lat = { $gte: bounds.south, $lte: bounds.north };
     if (bounds.west <= bounds.east) {
@@ -203,6 +255,20 @@ async function queryPresenceMongo({ excludeDeviceId, bounds, maxAgeMs }) {
   }));
 }
 
+async function pushVoiceSignalMongo(signal) {
+  const db = await getMongoDb();
+  await db.collection("voiceSignals").insertOne(signal);
+}
+
+async function drainVoiceSignalsMongo(toDeviceId) {
+  const db = await getMongoDb();
+  const docs = await db.collection("voiceSignals").find({ toDeviceId }).limit(200).toArray();
+  if (docs.length > 0) {
+    await db.collection("voiceSignals").deleteMany({ _id: { $in: docs.map((d) => d._id) } });
+  }
+  return docs;
+}
+
 // ---- Public API -------------------------------------------------------
 
 async function load() {
@@ -221,8 +287,25 @@ async function queryPresence(opts) {
   return MONGODB_URI ? queryPresenceMongo(opts) : queryPresenceLocal(opts);
 }
 
+async function pushVoiceSignal(signal) {
+  return MONGODB_URI ? pushVoiceSignalMongo(signal) : pushVoiceSignalLocal(signal);
+}
+
+async function drainVoiceSignals(toDeviceId) {
+  return MONGODB_URI ? drainVoiceSignalsMongo(toDeviceId) : drainVoiceSignalsLocal(toDeviceId);
+}
+
 function id(prefix) {
   return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
 }
 
-module.exports = { load, save, id, DB_PATH, upsertPresence, queryPresence };
+module.exports = {
+  load,
+  save,
+  id,
+  DB_PATH,
+  upsertPresence,
+  queryPresence,
+  pushVoiceSignal,
+  drainVoiceSignals,
+};

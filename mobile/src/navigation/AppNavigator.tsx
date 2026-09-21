@@ -4,6 +4,7 @@ import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
 import { useUser } from "../context/UserContext";
+import { ProximityVoiceProvider } from "../context/ProximityVoiceContext";
 import { colors, fonts } from "../theme";
 import WelcomeScreen from "../screens/WelcomeScreen";
 import DisclaimerScreen from "../screens/DisclaimerScreen";
@@ -20,7 +21,6 @@ import GoSummaryScreen from "../screens/GoSummaryScreen";
 import StatsScreen from "../screens/StatsScreen";
 import RaceLiveScreen from "../screens/RaceLiveScreen";
 import RaceResultScreen from "../screens/RaceResultScreen";
-import ChatScreen from "../screens/ChatScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -64,8 +64,13 @@ export default function AppNavigator() {
   // Logging out drops `user` back to null, which sends you right back to
   // the Username screen (in its sign-up/log-in mode) the same way.
   return (
-    <NavigationContainer theme={navTheme}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+    // Above the navigator, not inside any one screen -- see
+    // ProximityVoiceContext.tsx for why this has to be a single instance
+    // shared app-wide rather than something each screen sets up itself. It
+    // no-ops (no mic, no connections) until a user is actually signed in.
+    <ProximityVoiceProvider>
+      <NavigationContainer theme={navTheme}>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!welcomeSeen ? (
           <Stack.Screen name="Welcome" component={WelcomeScreen} />
         ) : !disclaimerAccepted ? (
@@ -108,19 +113,11 @@ export default function AppNavigator() {
             />
             <Stack.Screen name="RaceLive" component={RaceLiveScreen} />
             <Stack.Screen name="RaceResult" component={RaceResultScreen} />
-            <Stack.Screen
-              name="Chat"
-              component={ChatScreen}
-              options={({ route }) => ({
-                ...headerOptions,
-                headerShown: true,
-                title: route.params.withDisplayName,
-              })}
-            />
           </>
         )}
       </Stack.Navigator>
-    </NavigationContainer>
+      </NavigationContainer>
+    </ProximityVoiceProvider>
   );
 }
 

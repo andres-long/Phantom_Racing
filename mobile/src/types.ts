@@ -144,11 +144,29 @@ export type RaceChallenge = {
   opponentResult: RaceResult | null;
 };
 
-// ---- Proximity chat (message a nearby player) --------------------------
+// ---- Proximity voice (real-time audio with whoever's nearby) ----------
 
-export type ChatMessage = { id: string; text: string; createdAt: string; mine: boolean };
+// A peer currently in voice range: close enough, voice-enabled, and not
+// blocked either direction. Distinct from PresenceUser (map markers use a
+// wider radius and include incognito/voice-off users too).
+export type VoicePeer = {
+  deviceId: string;
+  displayName: string;
+};
 
-export type ChatThreadResponse = { withDisplayName: string; messages: ChatMessage[] };
+export type VoiceSignalKind = "offer" | "answer" | "ice";
+
+// A relayed WebRTC signaling message -- the server is just a mailbox, it
+// never looks at `data` (an SDP blob or ICE candidate, opaque to it).
+export type VoiceSignal = {
+  id: string;
+  fromDeviceId: string;
+  fromDisplayName: string;
+  kind: VoiceSignalKind;
+  data: any;
+};
+
+export type BlockedPlayer = { deviceId: string; displayName: string };
 
 // ---- Personal drive history (feeds the Stats screen) ------------------
 
@@ -197,5 +215,4 @@ export type RootStackParamList = {
   Stats: undefined;
   RaceLive: { raceId: string };
   RaceResult: { raceId: string };
-  Chat: { withDeviceId: string; withDisplayName: string };
 };

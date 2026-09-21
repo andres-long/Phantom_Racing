@@ -16,7 +16,10 @@ import {
   TripHistoryEntry,
   RaceChallenge,
   RaceDistanceKey,
-  ChatThreadResponse,
+  VoicePeer,
+  VoiceSignal,
+  VoiceSignalKind,
+  BlockedPlayer,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -157,10 +160,16 @@ export const api = {
   // error to the driver); queryPresence takes the current visible map
   // region so the same call naturally covers "who's near me" and "who's
   // over there" after panning.
-  sendHeartbeat: (deviceId: string, position: LatLng, heading: number | null, incognito: boolean) =>
+  sendHeartbeat: (
+    deviceId: string,
+    position: LatLng,
+    heading: number | null,
+    incognito: boolean,
+    voiceEnabled: boolean
+  ) =>
     request<{ ok: true }>("/api/presence", {
       method: "POST",
-      body: JSON.stringify({ deviceId, lat: position.lat, lng: position.lng, heading, incognito }),
+      body: JSON.stringify({ deviceId, lat: position.lat, lng: position.lng, heading, incognito, voiceEnabled }),
     }),
 
   queryPresence: (deviceId: string, bounds: MapBounds) =>
@@ -214,16 +223,41 @@ export const api = {
       body: JSON.stringify({ deviceId }),
     }),
 
-  // Proximity chat -- a 1:1 thread with a specific nearby player, reached
-  // the same way as a race challenge (by deviceId).
-  sendMessage: (fromDeviceId: string, toDeviceId: string, text: string) =>
-    request<{ id: string; text: string; createdAt: string; mine: boolean }>("/api/messages", {
+  // Proximity voice -- real-time audio (WebRTC) with whoever's nearby right
+  // now. The server never touches audio itself: `nearbyVoicePeers` says who
+  // you should be connected to, and `sendVoiceSignal`/`pollVoiceSignals` are
+  // just a mailbox for the SDP offers/answers/ICE candidates the two
+  // devices negotiate directly with each other.
+  nearbyVoicePeers: (deviceId: string, position: LatLng) =>
+    request<{ peers: VoicePeer[] }>(
+      `/api/voice/nearby?deviceId=${encodeURIComponent(deviceId)}&lat=${position.lat}&lng=${position.lng}`
+    ),
+
+  sendVoiceSignal: (fromDeviceId: string, toDeviceId: string, kind: VoiceSignalKind, data: any) =>
+    request<{ ok: true }>("/api/voice/signal", {
       method: "POST",
-      body: JSON.stringify({ fromDeviceId, toDeviceId, text }),
+      body: JSON.stringify({ fromDeviceId, toDeviceId, kind, data }),
     }),
 
-  getMessages: (deviceId: string, withDeviceId: string) =>
-    request<ChatThreadResponse>(
-      `/api/messages?deviceId=${encodeURIComponent(deviceId)}&withDeviceId=${encodeURIComponent(withDeviceId)}`
-    ),
+  // Drains (not just reads) whatever signals have arrived since the last
+  // poll -- see the backend route for why a mailbox model fits WebRTC
+  // signaling better than the "always returns the full list" pattern used
+  // elsewhere (races, presence).
+  pollVoiceSignals: (deviceId: string) =>
+    request<{ signals: VoiceSignal[] }>(`/api/voice/signal?deviceId=${encodeURIComponent(deviceId)}`),
+
+  blockPlayer: (deviceId: string, blockedDeviceId: string) =>
+    request<{ ok: true }>("/api/voice/block", {
+      method: "POST",
+      body: JSON.stringify({ deviceId, blockedDeviceId }),
+    }),
+
+  unblockPlayer: (deviceId: string, blockedDeviceId: string) =>
+    request<{ ok: true }>("/api/voice/unblock", {
+      method: "POST",
+      body: JSON.stringify({ deviceId, blockedDeviceId }),
+    }),
+
+  getBlockedPlayers: (deviceId: string) =>
+    request<{ blocked: BlockedPlayer[] }>(`/api/voice/blocked?deviceId=${encodeURIComponent(deviceId)}`),
 };

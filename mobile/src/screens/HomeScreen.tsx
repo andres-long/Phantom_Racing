@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, AppState } from "react-native";
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, AppState, Alert } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import * as Location from "expo-location";
 import { useFocusEffect } from "@react-navigation/native";
@@ -16,6 +16,7 @@ import {
 } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
+import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
 import { cumulativeDistances, projectOntoPolyline, pointAtDistance, haversine } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort, formatDistanceLong } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
@@ -74,7 +75,9 @@ function regionToBounds(region: Region): MapBounds {
 // Browsing the full list of every track ever recorded lives one tap away
 // (the "All tracks" button), since that's a secondary, occasional action.
 export default function HomeScreen({ navigation }: Props) {
-  const { user, vehicleStyle, incognito, units } = useUser();
+  const { user, vehicleStyle, incognito, voiceEnabled, units } = useUser();
+  const { reportPosition, connectedPeers, talking, setTalking, micReady } = useProximityVoiceContext();
+  const [blocking, setBlocking] = useState(false);
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
@@ -122,6 +125,7 @@ export default function HomeScreen({ navigation }: Props) {
   // every time position, incognito, or the signed-in user changes.
   const latestPosRef = useRef<{ coords: LatLng; heading: number | null } | null>(null);
   const incognitoRef = useRef(incognito);
+  const voiceEnabledRef = useRef(voiceEnabled);
   const userRef = useRef(user);
   const regionRef = useRef<Region>(FALLBACK_REGION);
   const presenceInFlightRef = useRef(false);
@@ -129,6 +133,9 @@ export default function HomeScreen({ navigation }: Props) {
   useEffect(() => {
     incognitoRef.current = incognito;
   }, [incognito]);
+  useEffect(() => {
+    voiceEnabledRef.current = voiceEnabled;
+  }, [voiceEnabled]);
   useEffect(() => {
     userRef.current = user;
   }, [user]);
@@ -143,7 +150,9 @@ export default function HomeScreen({ navigation }: Props) {
     const deviceId = userRef.current?.deviceId;
     const pos = latestPosRef.current;
     if (!deviceId || !pos || AppState.currentState !== "active") return;
-    api.sendHeartbeat(deviceId, pos.coords, pos.heading, incognitoRef.current).catch(() => {});
+    api
+      .sendHeartbeat(deviceId, pos.coords, pos.heading, incognitoRef.current, voiceEnabledRef.current)
+      .catch(() => {});
   }, []);
 
   // Refreshes who else is visible in the current map region. Independent of
@@ -221,6 +230,7 @@ export default function HomeScreen({ navigation }: Props) {
               setHeading(validHeading);
             }
             latestPosRef.current = { coords: pos, heading: validHeading };
+            reportPosition(pos, validHeading);
             const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
             setSpeedKmh(currentSpeedKmh);
 
@@ -265,7 +275,7 @@ export default function HomeScreen({ navigation }: Props) {
         subscriptionRef.current = null;
         clearInterval(presenceTimer);
       };
-    }, [loadSegments, navigation, sendHeartbeatTick, refreshPresence, refreshIncomingRaces])
+    }, [loadSegments, navigation, sendHeartbeatTick, refreshPresence, refreshIncomingRaces, reportPosition])
   );
 
   // Polls the race we just challenged someone to, waiting for them to
@@ -368,6 +378,39 @@ export default function HomeScreen({ navigation }: Props) {
     setPendingRaceId(null);
     setRaceStep("closed");
     api.cancelRace(raceId, user.deviceId).catch(() => {});
+  };
+
+  // Blocking is a voice-only cutoff (see the server's isBlockedPair) -- it
+  // stops them showing up as a proximity-voice peer for either of you, but
+  // doesn't hide their map marker or stop you racing them; that's a
+  // deliberate, narrower scope than a full presence block.
+  const onBlockSelected = () => {
+    if (!user || !selectedUser) return;
+    const target = selectedUser;
+    Alert.alert(
+      "Block this racer?",
+      `${target.displayName} won't be able to voice-chat with you, and you won't hear them either. Undo this anytime from your account screen.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Block",
+          style: "destructive",
+          onPress: async () => {
+            setBlocking(true);
+            try {
+              await api.blockPlayer(user.deviceId, target.deviceId);
+            } catch {
+              // Best-effort -- blocking again from the account screen still
+              // works if this particular request dropped.
+            } finally {
+              setBlocking(false);
+              setSelectedUser(null);
+              setRaceStep("closed");
+            }
+          },
+        },
+      ]
+    );
   };
 
   const respondIncoming = async (accept: boolean) => {
@@ -529,7 +572,25 @@ export default function HomeScreen({ navigation }: Props) {
             {otherUsers.length} racer{otherUsers.length === 1 ? "" : "s"} on the map
           </Text>
         )}
+        {voiceEnabled && connectedPeers.length > 0 && (
+          <Text style={styles.voiceCount} numberOfLines={1}>
+            Voice: {connectedPeers.map((p) => p.displayName).join(", ")}
+          </Text>
+        )}
       </View>
+
+      {voiceEnabled && (
+        <Pressable
+          style={[styles.talkButton, talking && styles.talkButtonActive, !micReady && styles.talkButtonDisabled]}
+          disabled={!micReady}
+          onPressIn={() => setTalking(true)}
+          onPressOut={() => setTalking(false)}
+        >
+          <Text style={[styles.talkButtonText, talking && styles.talkButtonTextActive]}>
+            {!micReady ? "MIC UNAVAILABLE" : talking ? "TALKING..." : "HOLD TO TALK"}
+          </Text>
+        </Pressable>
+      )}
 
       {selected && (
         <View style={styles.card}>
@@ -590,14 +651,10 @@ export default function HomeScreen({ navigation }: Props) {
                   style={styles.cardButton}
                 />
                 <NeonButton
-                  label="CHAT"
+                  label={blocking ? "BLOCKING..." : "BLOCK"}
                   variant="outline"
-                  onPress={() =>
-                    navigation.navigate("Chat", {
-                      withDeviceId: selectedUser.deviceId,
-                      withDisplayName: selectedUser.displayName,
-                    })
-                  }
+                  onPress={onBlockSelected}
+                  disabled={blocking}
                   style={styles.cardButton}
                 />
               </View>
@@ -747,6 +804,25 @@ const styles = StyleSheet.create({
   speedUnit: { color: colors.textSecondary, fontSize: 11, marginBottom: 4, letterSpacing: 1 },
   nearbyCount: { color: colors.textSecondary, fontSize: 11, marginTop: 4, textAlign: "center" },
   onlineCount: { color: colors.racePrimary, fontSize: 11, marginTop: 2, textAlign: "center", fontWeight: "700" },
+  voiceCount: { color: colors.cyan, fontSize: 11, marginTop: 2, textAlign: "center", fontWeight: "700", maxWidth: 140 },
+  talkButton: {
+    position: "absolute",
+    bottom: 96,
+    left: "50%",
+    marginLeft: -74,
+    width: 148,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: colors.panel,
+    borderWidth: 1.5,
+    borderColor: colors.cyan,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  talkButtonActive: { backgroundColor: colors.racePrimary, borderColor: colors.racePrimary },
+  talkButtonDisabled: { opacity: 0.4 },
+  talkButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "800", letterSpacing: 0.5 },
+  talkButtonTextActive: { color: colors.bg },
   otherUserWrap: { alignItems: "center" },
   otherUserLabel: {
     backgroundColor: "#000000dd",

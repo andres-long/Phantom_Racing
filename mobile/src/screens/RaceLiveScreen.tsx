@@ -7,6 +7,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, LatLng, RaceChallenge, RaceProgress } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
+import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
 import { haversine, formatDuration } from "../utils/geo";
 import { displaySpeedKmh, speedUnit } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
@@ -46,6 +47,7 @@ const FALLBACK_REGION: Region = {
 export default function RaceLiveScreen({ route, navigation }: Props) {
   const { raceId } = route.params;
   const { user, vehicleStyle, units } = useUser();
+  const { reportPosition } = useProximityVoiceContext();
   const insets = useSafeAreaInsets();
 
   const [phase, setPhase] = useState<"loading" | "countdown" | "racing" | "ending">("loading");
@@ -173,6 +175,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     setMyPos(pos);
     if (last.heading != null) setHeading(last.heading);
     presencePosRef.current = { coords: pos, heading: last.heading ?? null };
+    reportPosition(pos, last.heading ?? null);
     mapRef.current?.animateToRegion(
       { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.012, longitudeDelta: 0.012 },
       500

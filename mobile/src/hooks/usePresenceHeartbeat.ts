@@ -22,9 +22,10 @@ export type PresencePositionRef = MutableRefObject<{ coords: LatLng; heading: nu
 // latestPosRef) without this hook's effect re-running -- and therefore
 // without tearing down/restarting the interval -- on every GPS point.
 export function usePresenceHeartbeat(posRef: PresencePositionRef) {
-  const { user, incognito } = useUser();
+  const { user, incognito, voiceEnabled } = useUser();
   const userRef = useRef(user);
   const incognitoRef = useRef(incognito);
+  const voiceEnabledRef = useRef(voiceEnabled);
 
   useEffect(() => {
     userRef.current = user;
@@ -32,17 +33,22 @@ export function usePresenceHeartbeat(posRef: PresencePositionRef) {
   useEffect(() => {
     incognitoRef.current = incognito;
   }, [incognito]);
+  useEffect(() => {
+    voiceEnabledRef.current = voiceEnabled;
+  }, [voiceEnabled]);
 
   useEffect(() => {
     const tick = () => {
       const deviceId = userRef.current?.deviceId;
       const pos = posRef.current;
       if (!deviceId || !pos || AppState.currentState !== "active") return;
-      api.sendHeartbeat(deviceId, pos.coords, pos.heading, incognitoRef.current).catch(() => {
-        // Best-effort, same as Home's -- a dropped heartbeat just means this
-        // one tick didn't update your position, not something worth
-        // interrupting a race/recording/drive over.
-      });
+      api
+        .sendHeartbeat(deviceId, pos.coords, pos.heading, incognitoRef.current, voiceEnabledRef.current)
+        .catch(() => {
+          // Best-effort, same as Home's -- a dropped heartbeat just means
+          // this one tick didn't update your position, not something worth
+          // interrupting a race/recording/drive over.
+        });
     };
     tick();
     const timer = setInterval(tick, HEARTBEAT_INTERVAL_MS);

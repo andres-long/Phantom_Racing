@@ -47,6 +47,12 @@ const RACE_REQUEST_TIMEOUT_MS = 45000;
 // each individual device happens to receive the accept.
 const RACE_COUNTDOWN_MS = 5000;
 
+// How close (meters) two racers have to be for proximity voice to connect
+// them -- deliberately much tighter than presence's map-viewport query or a
+// track's 5km "nearby" radius: this is meant to feel like "close enough to
+// yell at from the next car over," not "somewhere in the same city."
+const VOICE_RADIUS_M = 500;
+
 // Minimal HTTPS GET-JSON helper, built on Node's own `https` (no axios/
 // node-fetch) to keep this backend's zero-dependency design -- used only
 // for the handful of Google Places/Directions calls below.
@@ -286,16 +292,16 @@ function raceSummary(dbState, race, viewerUserId) {
   };
 }
 
-// Client-facing view of a chat message, from one specific viewer's side --
-// just enough for the client to know which side of the thread to render it
-// on, without exposing raw user ids it doesn't need.
-function messageSummary(msg, viewerUserId) {
-  return {
-    id: msg.id,
-    text: msg.text,
-    createdAt: msg.createdAt,
-    mine: msg.fromUserId === viewerUserId,
-  };
+// True if either user has blocked the other -- checked both directions, so
+// blocking someone hides you from them just as much as it hides them from
+// you (neither side gets offered as a voice peer, and neither can reach the
+// other via the signaling relay even by guessing a deviceId).
+function isBlockedPair(dbState, userIdA, userIdB) {
+  return dbState.blocks.some(
+    (b) =>
+      (b.blockerUserId === userIdA && b.blockedUserId === userIdB) ||
+      (b.blockerUserId === userIdB && b.blockedUserId === userIdA)
+  );
 }
 
 const routes = [];
@@ -837,6 +843,10 @@ route("POST", "/api/presence", async ({ res, body }) => {
     // out a stale timeout, and flipping it on hides you the moment the next
     // heartbeat lands rather than up to PRESENCE_MAX_AGE_MS later.
     incognito: !!body.incognito,
+    // Separate opt-out from incognito -- see VOICE_ENABLED_KEY on the
+    // client. Defaults true when the field is missing/not a boolean so an
+    // older client (before this field existed) still counts as reachable.
+    voiceEnabled: body.voiceEnabled !== false,
     updatedAt: new Date().toISOString(),
   });
   sendJson(res, 200, { ok: true });
@@ -1087,17 +1097,59 @@ route("POST", "/api/races/:id/cancel", async ({ res, params, body }) => {
   sendJson(res, 200, raceSummary(state, race, me.id));
 });
 
-// ---- Proximity chat (message a nearby player) ------------------------
+// ---- Proximity voice (real-time audio with whoever's nearby) ----------
+//
+// The server never touches audio -- it only (a) tells a device who's
+// currently in range and voice-eligible, and (b) relays the WebRTC
+// signaling messages (SDP offers/answers, ICE candidates) the two devices
+// need to negotiate a direct peer-to-peer audio connection with each other.
+// Mirrors the race-challenge pattern of addressing everything by deviceId.
 
-route("POST", "/api/messages", async ({ res, body }) => {
+route("GET", "/api/voice/nearby", async ({ res, query }) => {
+  const deviceId = (query.get("deviceId") || "").trim();
+  const lat = Number(query.get("lat"));
+  const lng = Number(query.get("lng"));
+  if (!deviceId) return sendJson(res, 400, { error: "Missing deviceId." });
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return sendJson(res, 400, { error: "Missing or invalid lat/lng." });
+  }
+
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 404, { error: "User not found" });
+
+  // No bounds -- everyone currently online and voice-eligible, then
+  // filtered to the tight VOICE_RADIUS_M below. A map-viewport style query
+  // doesn't make sense here since proximity voice cares about real-world
+  // distance from the caller, not what's currently on their screen.
+  const online = await db.queryPresence({
+    excludeDeviceId: deviceId,
+    bounds: null,
+    maxAgeMs: PRESENCE_MAX_AGE_MS,
+    requireVoiceEnabled: true,
+  });
+
+  const peers = online
+    .filter((record) => geo.haversine({ lat, lng }, { lat: record.lat, lng: record.lng }) <= VOICE_RADIUS_M)
+    .map((record) => {
+      const otherUser = findUserByDevice(state, record.deviceId);
+      return otherUser ? { deviceId: record.deviceId, displayName: otherUser.displayName, userId: otherUser.id } : null;
+    })
+    .filter((peer) => peer && !isBlockedPair(state, me.id, peer.userId))
+    .map(({ deviceId, displayName }) => ({ deviceId, displayName }));
+
+  sendJson(res, 200, { peers });
+});
+
+// Relays one signaling message. `data` is opaque here -- whatever shape the
+// client's WebRTC layer produces (an SDP blob for offer/answer, a candidate
+// object for ice), the server just stores and forwards it untouched.
+route("POST", "/api/voice/signal", async ({ res, body }) => {
   const fromDeviceId = (body.fromDeviceId || "").trim();
   const toDeviceId = (body.toDeviceId || "").trim();
-  const text = (body.text || "").trim();
-  if (!fromDeviceId || !toDeviceId || !text) {
-    return sendJson(res, 400, { error: "fromDeviceId, toDeviceId, and text are required" });
-  }
-  if (text.length > 500) {
-    return sendJson(res, 400, { error: "Message is too long (500 characters max)." });
+  const kind = body.kind;
+  if (!fromDeviceId || !toDeviceId || !["offer", "answer", "ice"].includes(kind)) {
+    return sendJson(res, 400, { error: "fromDeviceId, toDeviceId, and a valid kind (offer, answer, ice) are required" });
   }
 
   const state = await db.load();
@@ -1105,43 +1157,112 @@ route("POST", "/api/messages", async ({ res, body }) => {
   const to = findUserByDevice(state, toDeviceId);
   if (!from) return sendJson(res, 400, { error: "Unknown deviceId; register the user first." });
   if (!to) return sendJson(res, 404, { error: "That player isn't available right now." });
+  if (isBlockedPair(state, from.id, to.id)) {
+    return sendJson(res, 403, { error: "That player isn't available right now." });
+  }
 
-  const msg = {
-    id: db.id("msg"),
-    fromUserId: from.id,
-    toUserId: to.id,
-    text,
+  await db.pushVoiceSignal({
+    id: db.id("vsig"),
+    toDeviceId,
+    fromDeviceId,
+    fromDisplayName: from.displayName,
+    kind,
+    data: body.data,
     createdAt: new Date().toISOString(),
-  };
-  state.messages.push(msg);
-  await db.save(state);
-  sendJson(res, 201, messageSummary(msg, from.id));
+  });
+  sendJson(res, 200, { ok: true });
 });
 
-// Whole thread with one specific other player, oldest first. Re-fetched in
-// full on each poll rather than incrementally -- thread sizes are small
-// enough for this app's scale that the simplicity is worth it.
-route("GET", "/api/messages", async ({ res, query }) => {
+// Drains (returns + deletes) every signal currently waiting for this
+// device. Meant to be polled frequently (every second or two) only while
+// there's an active call to set up or tear down -- not on a steady
+// background cadence the way presence/incoming-races are.
+route("GET", "/api/voice/signal", async ({ res, query }) => {
   const deviceId = (query.get("deviceId") || "").trim();
-  const withDeviceId = (query.get("withDeviceId") || "").trim();
-  if (!deviceId || !withDeviceId) return sendJson(res, 400, { error: "deviceId and withDeviceId are required" });
+  if (!deviceId) return sendJson(res, 400, { error: "Missing deviceId." });
+  const signals = await db.drainVoiceSignals(deviceId);
+  sendJson(
+    res,
+    200,
+    {
+      signals: signals.map((s) => ({
+        id: s.id,
+        fromDeviceId: s.fromDeviceId,
+        fromDisplayName: s.fromDisplayName,
+        kind: s.kind,
+        data: s.data,
+      })),
+    }
+  );
+});
+
+route("POST", "/api/voice/block", async ({ res, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const blockedDeviceId = (body.blockedDeviceId || "").trim();
+  if (!deviceId || !blockedDeviceId) {
+    return sendJson(res, 400, { error: "deviceId and blockedDeviceId are required" });
+  }
 
   const state = await db.load();
   const me = findUserByDevice(state, deviceId);
-  const other = findUserByDevice(state, withDeviceId);
+  const target = findUserByDevice(state, blockedDeviceId);
   if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
-  if (!other) return sendJson(res, 404, { error: "That player isn't available right now." });
+  if (!target) return sendJson(res, 404, { error: "That player isn't available right now." });
+  if (me.id === target.id) return sendJson(res, 400, { error: "You can't block yourself." });
 
-  const thread = state.messages
-    .filter(
-      (m) =>
-        (m.fromUserId === me.id && m.toUserId === other.id) ||
-        (m.fromUserId === other.id && m.toUserId === me.id)
-    )
-    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-    .map((m) => messageSummary(m, me.id));
+  if (!isBlockedPair(state, me.id, target.id)) {
+    state.blocks.push({
+      id: db.id("blk"),
+      blockerUserId: me.id,
+      blockedUserId: target.id,
+      createdAt: new Date().toISOString(),
+    });
+    await db.save(state);
+  }
+  sendJson(res, 200, { ok: true });
+});
 
-  sendJson(res, 200, { withDisplayName: other.displayName, messages: thread });
+// Only the person who placed a block can lift it -- unblocking removes just
+// the (blocker -> blocked) row, so if both sides had somehow blocked each
+// other, each still needs to unblock on their own side.
+route("POST", "/api/voice/unblock", async ({ res, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const blockedDeviceId = (body.blockedDeviceId || "").trim();
+  if (!deviceId || !blockedDeviceId) {
+    return sendJson(res, 400, { error: "deviceId and blockedDeviceId are required" });
+  }
+
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  const target = findUserByDevice(state, blockedDeviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+  if (!target) return sendJson(res, 404, { error: "That player isn't available right now." });
+
+  const before = state.blocks.length;
+  state.blocks = state.blocks.filter((b) => !(b.blockerUserId === me.id && b.blockedUserId === target.id));
+  if (state.blocks.length !== before) {
+    await db.save(state);
+  }
+  sendJson(res, 200, { ok: true });
+});
+
+route("GET", "/api/voice/blocked", async ({ res, query }) => {
+  const deviceId = (query.get("deviceId") || "").trim();
+  if (!deviceId) return sendJson(res, 400, { error: "Missing deviceId." });
+
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+
+  const blocked = state.blocks
+    .filter((b) => b.blockerUserId === me.id)
+    .map((b) => {
+      const target = state.users.find((u) => u.id === b.blockedUserId);
+      return target ? { deviceId: target.deviceId, displayName: target.displayName } : null;
+    })
+    .filter(Boolean);
+
+  sendJson(res, 200, { blocked });
 });
 
 const server = http.createServer((req, res) => {

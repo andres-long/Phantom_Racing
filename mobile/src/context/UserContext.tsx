@@ -12,6 +12,7 @@ type UserContextValue = {
   disclaimerAccepted: boolean;
   vehicleStyle: VehicleStyle;
   incognito: boolean;
+  voiceEnabled: boolean;
   units: Units;
   completeWelcome: () => Promise<void>;
   acceptDisclaimer: () => Promise<void>;
@@ -20,6 +21,7 @@ type UserContextValue = {
   setDisplayName: (name: string) => Promise<void>;
   setVehicleStyle: (style: VehicleStyle) => Promise<void>;
   setIncognito: (value: boolean) => Promise<void>;
+  setVoiceEnabled: (value: boolean) => Promise<void>;
   setUnits: (value: Units) => Promise<void>;
   logOut: () => Promise<void>;
 };
@@ -36,6 +38,13 @@ const VEHICLE_STYLE_KEY = "nfs.vehicleStyle";
 // an `incognito` flag sent along with every heartbeat, so toggling it takes
 // effect on the very next heartbeat rather than needing a round trip.
 const INCOGNITO_KEY = "nfs.incognito";
+// Whether you're reachable for proximity voice -- a separate, more specific
+// opt-out than incognito (you can still be seen on the map but not audible,
+// or vice versa isn't possible since voice requires knowing your position
+// anyway). Same local-preference pattern, sent with every heartbeat so the
+// server can exclude you from everyone else's nearby-voice list the moment
+// you turn it off.
+const VOICE_ENABLED_KEY = "nfs.voiceEnabled";
 // Whether speed/distance are shown in mph/miles or km/h/kilometers. Local
 // per-device preference, same as vehicleStyle -- purely a display choice,
 // nothing the backend needs to know about (it always stores/returns km/h
@@ -52,6 +61,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   // something synced to the account on the backend.
   const [vehicleStyle, setVehicleStyleState] = useState<VehicleStyle>("jet");
   const [incognito, setIncognitoState] = useState(false);
+  // Default on -- proximity voice is an opt-out feature, matching how
+  // presence visibility defaults to on (incognito defaults false).
+  const [voiceEnabled, setVoiceEnabledState] = useState(true);
   const [units, setUnitsState] = useState<Units>("metric");
 
   useEffect(() => {
@@ -66,6 +78,10 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       }
       const savedIncognito = (await AsyncStorage.getItem(INCOGNITO_KEY)) === "true";
       setIncognitoState(savedIncognito);
+      const savedVoiceEnabled = await AsyncStorage.getItem(VOICE_ENABLED_KEY);
+      if (savedVoiceEnabled !== null) {
+        setVoiceEnabledState(savedVoiceEnabled === "true");
+      }
       const savedUnits = await AsyncStorage.getItem(UNITS_KEY);
       if (savedUnits === "metric" || savedUnits === "imperial") {
         setUnitsState(savedUnits);
@@ -135,6 +151,11 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setIncognitoState(value);
   };
 
+  const setVoiceEnabled = async (value: boolean) => {
+    await AsyncStorage.setItem(VOICE_ENABLED_KEY, value ? "true" : "false");
+    setVoiceEnabledState(value);
+  };
+
   const setUnits = async (value: Units) => {
     await AsyncStorage.setItem(UNITS_KEY, value);
     setUnitsState(value);
@@ -149,6 +170,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         disclaimerAccepted,
         vehicleStyle,
         incognito,
+        voiceEnabled,
         units,
         completeWelcome,
         acceptDisclaimer,
@@ -157,6 +179,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         setDisplayName,
         setVehicleStyle,
         setIncognito,
+        setVoiceEnabled,
         setUnits,
         logOut,
       }}

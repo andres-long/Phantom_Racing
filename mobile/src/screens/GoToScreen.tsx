@@ -27,6 +27,7 @@ export default function GoToScreen({ navigation }: Props) {
 
   const mapRef = useRef<MapView | null>(null);
   const [myPos, setMyPos] = useState<LatLng | null>(null);
+  const [locationReady, setLocationReady] = useState(false);
   const [query, setQuery] = useState("");
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [searching, setSearching] = useState(false);
@@ -41,17 +42,41 @@ export default function GoToScreen({ navigation }: Props) {
   const searchTokenRef = useRef(0);
 
   useEffect(() => {
+    // The map's initialRegion is only read once, at mount, so we hold the
+    // map off-screen (locationReady stays false) until we have SOME fix to
+    // seed it with -- otherwise it bakes in a hardcoded fallback and never
+    // recovers. getLastKnownPositionAsync returns a cached fix almost
+    // instantly, which is enough to open the map in the right place; a
+    // fresh getCurrentPositionAsync fix follows right after to refine it.
+    let cancelled = false;
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") return;
+      if (status !== "granted") {
+        if (!cancelled) setLocationReady(true);
+        return;
+      }
+      try {
+        const last = await Location.getLastKnownPositionAsync({});
+        if (last && !cancelled) {
+          setMyPos({ lat: last.coords.latitude, lng: last.coords.longitude });
+          setLocationReady(true);
+        }
+      } catch {}
       try {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        setMyPos({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+        if (!cancelled) {
+          setMyPos({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+          setLocationReady(true);
+        }
       } catch {
         // No fix yet -- search still works, it just won't be location-biased
         // until one comes in, and Start will re-check before racing.
+        if (!cancelled) setLocationReady(true);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onChangeQuery = (text: string) => {
@@ -76,13 +101,14 @@ export default function GoToScreen({ navigation }: Props) {
     }, 350);
   };
 
-  const selectPrediction = async (prediction: PlacePrediction) => {
+  // Shared by both ways of picking a destination -- searching a place, or
+  // tapping a spot on the map -- once we already have a PlaceDetails-shaped
+  // object to route to.
+  const startRouting = async (place: PlaceDetails) => {
     setRouteError(null);
     setLoadingRoute(true);
+    setDestination(place);
     try {
-      const place = await api.placeDetails(prediction.placeId);
-      setDestination(place);
-
       let origin = myPos;
       if (!origin) {
         const { status } = await Location.requestForegroundPermissionsAsync();
@@ -112,6 +138,35 @@ export default function GoToScreen({ navigation }: Props) {
     } finally {
       setLoadingRoute(false);
     }
+  };
+
+  const selectPrediction = async (prediction: PlacePrediction) => {
+    setRouteError(null);
+    setLoadingRoute(true);
+    try {
+      const place = await api.placeDetails(prediction.placeId);
+      await startRouting(place);
+    } catch (e: any) {
+      setRouteError(e.message || "Couldn't find a route there.");
+      setLoadingRoute(false);
+    }
+  };
+
+  // Tap-to-pick: press anywhere on the map to route there directly, no
+  // typing needed. We don't have reverse geocoding wired up, so the picked
+  // spot shows as a plain coordinate rather than a place name/address.
+  const pickOnMap = (coordinate: { latitude: number; longitude: number }) => {
+    if (preview) return;
+    const place: PlaceDetails = {
+      placeId: `pin_${coordinate.latitude.toFixed(6)},${coordinate.longitude.toFixed(6)}`,
+      name: "Dropped pin",
+      address: `${coordinate.latitude.toFixed(5)}, ${coordinate.longitude.toFixed(5)}`,
+      lat: coordinate.latitude,
+      lng: coordinate.longitude,
+    };
+    setPredictions([]);
+    setQuery("");
+    startRouting(place);
   };
 
   const changeDestination = () => {
@@ -151,6 +206,14 @@ export default function GoToScreen({ navigation }: Props) {
   // truthy below, instead of needing a non-null assertion at every use.
   const preview = destination && directions ? { destination, directions } : null;
 
+  if (!locationReady) {
+    return (
+      <View style={[styles.container, styles.mapLoading]}>
+        <ActivityIndicator color={colors.cyan} size="large" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <MapView
@@ -164,6 +227,7 @@ export default function GoToScreen({ navigation }: Props) {
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
         }}
+        onPress={(e) => pickOnMap(e.nativeEvent.coordinate)}
       >
         {myPos && (
           <Marker coordinate={{ latitude: myPos.lat, longitude: myPos.lng }} anchor={{ x: 0.5, y: 0.5 }} flat tracksViewChanges={false}>
@@ -197,6 +261,7 @@ export default function GoToScreen({ navigation }: Props) {
       {!preview ? (
         <View style={[styles.searchPanel, { top: insets.top + 60 }]}>
           <Text style={styles.title}>GO TO</Text>
+          <Text style={styles.hint}>Search a place, or just tap a spot on the map</Text>
           <TextInput
             style={styles.input}
             placeholder="A place, address, or intersection"
@@ -255,6 +320,7 @@ export default function GoToScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
+  mapLoading: { alignItems: "center", justifyContent: "center" },
   cancelButton: {
     position: "absolute",
     left: 16,
@@ -278,6 +344,7 @@ const styles = StyleSheet.create({
     maxHeight: "70%",
   },
   title: { color: colors.textSecondary, fontFamily: fonts.heading, fontSize: 12, letterSpacing: 1.5, marginBottom: 10 },
+  hint: { color: colors.textMuted, fontSize: 11, marginTop: -6, marginBottom: 10 },
   input: {
     backgroundColor: colors.bgElevated,
     color: colors.textPrimary,

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, TextInput, Alert, Switch } from "react-native";
+import { View, Text, StyleSheet, TextInput, Alert, Switch, ActivityIndicator } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -36,6 +36,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   const [recording, setRecording] = useState(false);
   const [trace, setTrace] = useState<TracePoint[]>([]);
   const [myPos, setMyPos] = useState<LatLng | null>(null);
+  const [locationReady, setLocationReady] = useState(false);
   const [heading, setHeading] = useState(0);
   const [speedKmh, setSpeedKmh] = useState(0);
   const [naming, setNaming] = useState(false);
@@ -50,25 +51,45 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   usePresenceHeartbeat(presencePosRef);
 
   useEffect(() => {
+    // Same fix as GoToScreen: initialRegion is only read once at mount, so
+    // we hold the map off until we have a real fix -- a fast cached one via
+    // getLastKnownPositionAsync first, refined right after by a fresh
+    // getCurrentPositionAsync -- instead of ever mounting on the hardcoded
+    // fallback.
+    let cancelled = false;
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         Alert.alert("Location permission needed", "This app can't record a route without location access.");
+        if (!cancelled) setLocationReady(true);
         return;
       }
-      // A one-off fix so the vehicle marker has somewhere to sit before you
-      // start recording -- the live watcher only runs while recording.
+      try {
+        const last = await Location.getLastKnownPositionAsync({});
+        if (last && !cancelled) {
+          setMyPos({ lat: last.coords.latitude, lng: last.coords.longitude });
+          setLocationReady(true);
+        }
+      } catch {}
+      // A fresh fix so the vehicle marker has somewhere accurate to sit
+      // before you start recording -- the live watcher only runs while
+      // recording.
       try {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        setMyPos({ lat: loc.coords.latitude, lng: loc.coords.longitude });
-        if (loc.coords.heading != null && loc.coords.heading >= 0) {
-          setHeading(loc.coords.heading);
+        if (!cancelled) {
+          setMyPos({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+          if (loc.coords.heading != null && loc.coords.heading >= 0) {
+            setHeading(loc.coords.heading);
+          }
+          setLocationReady(true);
         }
       } catch {
         // No initial fix -- the marker just won't show until recording starts.
+        if (!cancelled) setLocationReady(true);
       }
     })();
     return () => {
+      cancelled = true;
       stopBackgroundTracking();
     };
   }, []);
@@ -94,7 +115,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
     // race -- otherwise the view stays wherever it opened and the road
     // you're drawing quickly runs off screen.
     mapRef.current?.animateToRegion(
-      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
+      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
       500
     );
   };
@@ -158,6 +179,14 @@ export default function CreateSegmentScreen({ navigation }: Props) {
       setSubmitting(false);
     }
   };
+
+  if (!locationReady) {
+    return (
+      <View style={[styles.container, styles.mapLoading]}>
+        <ActivityIndicator color={colors.cyan} size="large" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -260,6 +289,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
+  mapLoading: { alignItems: "center", justifyContent: "center" },
   hud: { position: "absolute", left: 20, right: 20, ...panelStyle, padding: 14 },
   hudText: { color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 13, textAlign: "center", letterSpacing: 1 },
   speedText: { color: colors.cyan, fontFamily: fonts.display, fontSize: 20, textAlign: "center", marginTop: 6 },

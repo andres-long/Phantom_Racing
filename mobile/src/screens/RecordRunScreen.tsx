@@ -152,8 +152,10 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     setMyPos({ lat: last.lat, lng: last.lng });
     if (last.heading != null) setHeading(last.heading);
     presencePosRef.current = { coords: { lat: last.lat, lng: last.lng }, heading: last.heading ?? null };
+    // Tighter than the old 0.015 so turns on small roads/blocks are easier
+    // to spot coming up, rather than getting lost in a wide zoomed-out view.
     mapRef.current?.animateToRegion(
-      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
+      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.006, longitudeDelta: 0.006 },
       500
     );
     setSpeedKmh(last.speedKmh);

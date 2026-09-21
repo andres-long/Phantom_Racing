@@ -235,8 +235,10 @@ export default function HomeScreen({ navigation }: Props) {
             setSpeedKmh(currentSpeedKmh);
 
             if (followRef.current) {
+              // Tighter than the old 0.02 so turns on small roads/blocks
+              // are easier to spot while driving.
               mapRef.current?.animateToRegion(
-                { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+                { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
                 500
               );
             }
@@ -348,7 +350,7 @@ export default function HomeScreen({ navigation }: Props) {
     if (!userPos) return;
     followRef.current = true;
     mapRef.current?.animateToRegion(
-      { latitude: userPos.lat, longitude: userPos.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+      { latitude: userPos.lat, longitude: userPos.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
       400
     );
   };

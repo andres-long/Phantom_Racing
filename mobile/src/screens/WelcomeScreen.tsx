@@ -46,8 +46,7 @@ export default function WelcomeScreen({ navigation }: Props) {
             <Text style={styles.stepTitle}>Record a segment</Text>
             <Text style={styles.stepText}>
               Drive (or walk) a stretch of road once with "New segment". That drive becomes a
-              segment other people can race -- and it's automatically your first time on the
-              leaderboard, no need to drive it twice.
+              segment other people can race.
             </Text>
           </View>
         </View>
@@ -58,7 +57,7 @@ export default function WelcomeScreen({ navigation }: Props) {
             <Text style={styles.stepTitle}>Race a "ghost"</Text>
             <Text style={styles.stepText}>
               Pick any segment and hit "Race it". You're timed against the current best run
-              live, shown as a ghost marker on the map -- ahead or behind, in real time.
+              live, shown as a ghost marker on the map.
             </Text>
           </View>
         </View>

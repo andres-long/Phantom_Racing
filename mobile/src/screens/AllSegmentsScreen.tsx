@@ -7,6 +7,7 @@ import { RootStackParamList, SegmentSummary, LatLng } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { cumulativeDistances, projectOntoPolyline } from "../utils/geo";
+import { formatDistanceShort, formatDistanceLong } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import NeonButton from "../components/NeonButton";
 import TrackPreview from "../components/TrackPreview";
@@ -21,7 +22,7 @@ type SortedSegment = SegmentSummary & { distanceM: number | null };
 // closest-first so the road you're most likely to actually drive today is
 // at the top, not buried under everything anyone's ever recorded.
 export default function AllSegmentsScreen({ navigation }: Props) {
-  const { user } = useUser();
+  const { user, units } = useUser();
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
   const [userPos, setUserPos] = useState<LatLng | null>(null);
   const [loading, setLoading] = useState(true);
@@ -94,7 +95,7 @@ export default function AllSegmentsScreen({ navigation }: Props) {
       });
   }, [segments, userPos]);
 
-  const formatDistance = (m: number) => (m < 1000 ? `${Math.round(m)}m away` : `${(m / 1000).toFixed(1)}km away`);
+  const formatDistance = (m: number) => `${formatDistanceShort(m, units)} away`;
 
   const togglePrivacy = async (segment: SortedSegment) => {
     if (!user) return;
@@ -149,7 +150,7 @@ export default function AllSegmentsScreen({ navigation }: Props) {
               <TrackPreview points={item.points} />
               <Text style={styles.cardMeta}>
                 {item.distanceM != null ? `${formatDistance(item.distanceM)} -- ` : ""}
-                {(item.lengthM / 1000).toFixed(2)} km -- {item.runCount} run{item.runCount === 1 ? "" : "s"}
+                {formatDistanceLong(item.lengthM, units)} -- {item.runCount} run{item.runCount === 1 ? "" : "s"}
               </Text>
               <Text style={styles.cardMeta}>
                 {item.bestTimeMs != null

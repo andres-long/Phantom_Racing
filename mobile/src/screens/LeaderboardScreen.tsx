@@ -5,6 +5,7 @@ import { RootStackParamList, LeaderboardEntry } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { formatDuration } from "../utils/geo";
+import { displaySpeedKmh, speedUnit } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
 
@@ -12,7 +13,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "Leaderboard">;
 
 export default function LeaderboardScreen({ route }: Props) {
   const { segmentId, segmentName } = route.params;
-  const { user } = useUser();
+  const { user, units } = useUser();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +45,8 @@ export default function LeaderboardScreen({ route }: Props) {
             <View style={{ flex: 1 }}>
               <Text style={styles.name}>{item.displayName}</Text>
               <Text style={styles.meta}>
-                {item.avgSpeedKmh} km/h avg . {Math.round(item.maxSpeedKmh)} km/h top
+                {displaySpeedKmh(item.avgSpeedKmh, units)} {speedUnit(units)} avg . {displaySpeedKmh(item.maxSpeedKmh, units)}{" "}
+                {speedUnit(units)} top
               </Text>
             </View>
             <Text style={styles.time}>{formatDuration(item.durationMs)}</Text>

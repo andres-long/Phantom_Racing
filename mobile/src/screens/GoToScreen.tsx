@@ -7,6 +7,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, LatLng, PlacePrediction, PlaceDetails, DirectionsResponse } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
+import { formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
@@ -21,7 +22,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "GoTo">;
 // stage 2: a map preview of that route, with a START button that hands off
 // to GoRaceScreen for the actual tracked, live-rerouting drive.
 export default function GoToScreen({ navigation }: Props) {
-  const { vehicleStyle } = useUser();
+  const { vehicleStyle, units } = useUser();
   const insets = useSafeAreaInsets();
 
   const mapRef = useRef<MapView | null>(null);
@@ -143,7 +144,7 @@ export default function GoToScreen({ navigation }: Props) {
     return `${h}h ${m}m`;
   };
 
-  const formatDistance = (m: number) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
+  const formatDistance = (m: number) => formatDistanceShort(m, units);
 
   // A combined value (rather than a plain boolean flag) so TypeScript can
   // narrow `destination`/`directions` to non-null wherever `preview` is

@@ -8,6 +8,7 @@ import { RootStackParamList, LatLng } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { polylineLength } from "../utils/geo";
+import { displaySpeedKmh, speedUnit } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
@@ -30,7 +31,7 @@ type TracePoint = LatLng & { t: number };
 // auto-submits it as that segment's first run -- you land straight on the
 // leaderboard instead of having to drive the same road again.
 export default function CreateSegmentScreen({ navigation }: Props) {
-  const { user, vehicleStyle } = useUser();
+  const { user, vehicleStyle, units } = useUser();
   const insets = useSafeAreaInsets();
   const [recording, setRecording] = useState(false);
   const [trace, setTrace] = useState<TracePoint[]>([]);
@@ -194,11 +195,19 @@ export default function CreateSegmentScreen({ navigation }: Props) {
 
       <View style={[styles.hud, { top: insets.top + 20 }]}>
         <Text style={styles.hudText}>
-          {recording ? `RECORDING -- ${Math.round(polylineLength(trace))}m` : "NOT RECORDING"}
+          {recording
+            ? `RECORDING -- ${
+                units === "imperial"
+                  ? `${Math.round(polylineLength(trace) * 3.28084)}ft`
+                  : `${Math.round(polylineLength(trace))}m`
+              }`
+            : "NOT RECORDING"}
         </Text>
         {recording && (
           <>
-            <Text style={styles.speedText}>{Math.round(speedKmh)} km/h</Text>
+            <Text style={styles.speedText}>
+              {displaySpeedKmh(speedKmh, units)} {speedUnit(units)}
+            </Text>
             <Text style={styles.trackingHint}>This drive will count as your first run on the leaderboard</Text>
           </>
         )}

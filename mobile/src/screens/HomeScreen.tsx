@@ -9,6 +9,7 @@ import { RootStackParamList, SegmentSummary, LatLng, PresenceUser, MapBounds } f
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { cumulativeDistances, projectOntoPolyline, pointAtDistance, haversine } from "../utils/geo";
+import { displaySpeedKmh, speedUnit, formatDistanceShort, formatDistanceLong } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
@@ -64,7 +65,7 @@ function regionToBounds(region: Region): MapBounds {
 // Browsing the full list of every track ever recorded lives one tap away
 // (the "All tracks" button), since that's a secondary, occasional action.
 export default function HomeScreen({ navigation }: Props) {
-  const { user, vehicleStyle, incognito } = useUser();
+  const { user, vehicleStyle, incognito, units } = useUser();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
@@ -260,7 +261,7 @@ export default function HomeScreen({ navigation }: Props) {
     );
   };
 
-  const formatDistance = (m: number) => (m < 1000 ? `${Math.round(m)}m away` : `${(m / 1000).toFixed(1)}km away`);
+  const formatDistance = (m: number) => `${formatDistanceShort(m, units)} away`;
 
   return (
     <View style={styles.container}>
@@ -373,8 +374,8 @@ export default function HomeScreen({ navigation }: Props) {
           <ActivityIndicator color={colors.cyan} />
         ) : (
           <>
-            <Text style={styles.speedValue}>{Math.round(speedKmh)}</Text>
-            <Text style={styles.speedUnit}>km/h</Text>
+            <Text style={styles.speedValue}>{displaySpeedKmh(speedKmh, units)}</Text>
+            <Text style={styles.speedUnit}>{speedUnit(units)}</Text>
           </>
         )}
         <Text style={styles.nearbyCount}>
@@ -396,7 +397,7 @@ export default function HomeScreen({ navigation }: Props) {
           </Pressable>
           <Text style={styles.cardTitle}>{selected.name}</Text>
           <Text style={styles.cardMeta}>
-            {formatDistance(selected.distanceM)} -- {(selected.lengthM / 1000).toFixed(2)} km
+            {formatDistance(selected.distanceM)} -- {formatDistanceLong(selected.lengthM, units)}
           </Text>
           <Text style={styles.cardMeta}>
             {selected.bestTimeMs != null

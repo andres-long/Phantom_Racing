@@ -128,8 +128,23 @@ function AuthForm() {
   );
 }
 
+const UNIT_OPTIONS: { key: "metric" | "imperial"; label: string }[] = [
+  { key: "metric", label: "KM/H" },
+  { key: "imperial", label: "MPH" },
+];
+
 function AccountView({ navigation }: { navigation: Props["navigation"] }) {
-  const { user, setDisplayName, logOut, vehicleStyle, setVehicleStyle, incognito, setIncognito } = useUser();
+  const {
+    user,
+    setDisplayName,
+    logOut,
+    vehicleStyle,
+    setVehicleStyle,
+    incognito,
+    setIncognito,
+    units,
+    setUnits,
+  } = useUser();
   const [name, setName] = useState(user?.displayName ?? "");
   const [saving, setSaving] = useState(false);
 
@@ -202,6 +217,23 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
               >
                 <VehicleMarker vehicleStyle={v.key} size={40} />
                 <Text style={[styles.vehicleLabel, selected && styles.vehicleLabelSelected]}>{v.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Text style={styles.sectionLabel}>UNITS</Text>
+        <Text style={styles.subtitle}>Speed and distance everywhere in the app -- HUDs, leaderboards, stats.</Text>
+        <View style={styles.vehicleRow}>
+          {UNIT_OPTIONS.map((o) => {
+            const selected = o.key === units;
+            return (
+              <Pressable
+                key={o.key}
+                onPress={() => setUnits(o.key)}
+                style={[styles.vehicleOption, selected && styles.vehicleOptionSelected]}
+              >
+                <Text style={[styles.unitOptionText, selected && styles.vehicleLabelSelected]}>{o.label}</Text>
               </Pressable>
             );
           })}
@@ -280,6 +312,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   vehicleLabelSelected: { color: colors.cyan },
+  unitOptionText: { color: colors.textSecondary, fontFamily: fonts.heading, fontSize: 13, letterSpacing: 1 },
   incognitoRow: {
     ...panelStyle,
     flexDirection: "row",

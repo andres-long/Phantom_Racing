@@ -8,6 +8,7 @@ import { RootStackParamList, LatLng } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { cumulativeDistances, projectOntoPolyline, haversine, formatDuration } from "../utils/geo";
+import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
@@ -46,7 +47,7 @@ const ARRIVAL_RADIUS_M = 40;
 export default function GoRaceScreen({ route, navigation }: Props) {
   const { destinationName, destination, route: initialRoute, distanceM: initialDistanceM, durationS } =
     route.params;
-  const { user, vehicleStyle } = useUser();
+  const { user, vehicleStyle, units } = useUser();
   const insets = useSafeAreaInsets();
 
   const [plannedRoute, setPlannedRoute] = useState<LatLng[]>(initialRoute);
@@ -249,7 +250,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
     const m = totalMin % 60;
     return `${h}h ${m}m`;
   };
-  const formatDistance = (m: number) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
+  const formatDistance = (m: number) => formatDistanceShort(m, units);
 
   return (
     <View style={styles.container}>
@@ -298,8 +299,8 @@ export default function GoRaceScreen({ route, navigation }: Props) {
           {formatDistance(distanceRemainingM)} left -- original ETA {formatEta(durationS)}
         </Text>
         <Text style={styles.speed}>
-          {Math.round(speedKmh)} km/h{"   "}
-          <Text style={styles.topSpeed}>top {Math.round(maxSpeedKmh)}</Text>
+          {displaySpeedKmh(speedKmh, units)} {speedUnit(units)}{"   "}
+          <Text style={styles.topSpeed}>top {displaySpeedKmh(maxSpeedKmh, units)}</Text>
         </Text>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />

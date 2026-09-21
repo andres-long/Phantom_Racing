@@ -15,6 +15,7 @@ import {
   pointAtDistance,
   formatDuration,
 } from "../utils/geo";
+import { displaySpeedKmh, speedUnit } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
@@ -33,7 +34,7 @@ type TracePoint = LatLng & { t: number };
 
 export default function RecordRunScreen({ route, navigation }: Props) {
   const { segmentId, autoStart } = route.params;
-  const { user, vehicleStyle } = useUser();
+  const { user, vehicleStyle, units } = useUser();
   const insets = useSafeAreaInsets();
 
   const [segment, setSegment] = useState<SegmentSummary | null>(null);
@@ -313,8 +314,8 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           <Text style={styles.noGhost}>No ghost yet -- you're setting the first time</Text>
         )}
         <Text style={styles.speed}>
-          {Math.round(speedKmh)} km/h{"   "}
-          <Text style={styles.topSpeed}>top {Math.round(maxSpeedKmh)}</Text>
+          {displaySpeedKmh(speedKmh, units)} {speedUnit(units)}{"   "}
+          <Text style={styles.topSpeed}>top {displaySpeedKmh(maxSpeedKmh, units)}</Text>
         </Text>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />

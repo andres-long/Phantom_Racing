@@ -4,6 +4,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
+import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
 
@@ -22,7 +23,7 @@ type Totals = {
 // not a plain mean of each drive's own average, so a handful of long
 // highway drives don't get outweighed by a lot of short, slow ones.
 export default function StatsScreen({}: Props) {
-  const { user } = useUser();
+  const { user, units } = useUser();
   const [totals, setTotals] = useState<Totals | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +66,7 @@ export default function StatsScreen({}: Props) {
     })();
   }, [user]);
 
-  const formatDistance = (m: number) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
+  const formatDistance = (m: number) => formatDistanceShort(m, units);
 
   return (
     <View style={styles.container}>
@@ -79,8 +80,8 @@ export default function StatsScreen({}: Props) {
           <>
             <View style={styles.tile}>
               <Text style={styles.tileLabel}>TOP SPEED</Text>
-              <Text style={styles.tileValue}>{Math.round(totals.topSpeedKmh)}</Text>
-              <Text style={styles.tileUnit}>km/h</Text>
+              <Text style={styles.tileValue}>{displaySpeedKmh(totals.topSpeedKmh, units)}</Text>
+              <Text style={styles.tileUnit}>{speedUnit(units)}</Text>
             </View>
             <View style={styles.tile}>
               <Text style={styles.tileLabel}>DISTANCE DRIVEN</Text>
@@ -89,8 +90,8 @@ export default function StatsScreen({}: Props) {
             </View>
             <View style={styles.tile}>
               <Text style={styles.tileLabel}>AVERAGE SPEED</Text>
-              <Text style={styles.tileValue}>{Math.round(totals.avgSpeedKmh)}</Text>
-              <Text style={styles.tileUnit}>km/h</Text>
+              <Text style={styles.tileValue}>{displaySpeedKmh(totals.avgSpeedKmh, units)}</Text>
+              <Text style={styles.tileUnit}>{speedUnit(units)}</Text>
             </View>
             <Text style={styles.footnote}>
               Based on {totals.driveCount} drive{totals.driveCount === 1 ? "" : "s"} -- segment runs and Go To

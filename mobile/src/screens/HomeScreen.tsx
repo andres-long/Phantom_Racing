@@ -699,8 +699,13 @@ export default function HomeScreen({ navigation }: Props) {
             </View>
           </Marker>
         ))}
-        {showTracks &&
-          nearby.map((s) => {
+        {/* Track lines stay mounted even while hidden and are just made
+            invisible: on Android, removing a Polyline doesn't always clear it
+            from the native map (hiding by unmounting left the lines drawn
+            with only their labels gone), while changing its color/width
+            always applies. The name labels are Markers, which do remove
+            cleanly, so those are simply not rendered while hidden. */}
+        {nearby.map((s) => {
           const cumDist = cumulativeDistances(s.points);
           const mid = pointAtDistance(s.points, cumDist, cumDist[cumDist.length - 1] / 2);
           const isSelected = s.id === selectedId;
@@ -708,31 +713,34 @@ export default function HomeScreen({ navigation }: Props) {
             <React.Fragment key={`${s.id}-${overlayEpoch}`}>
               <Polyline
                 coordinates={s.points.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
-                strokeColor={isSelected ? colors.racePrimary : colors.cyan}
-                strokeWidth={isSelected ? 6 : 4}
-                tappable
+                strokeColor={!showTracks ? "rgba(0,0,0,0)" : isSelected ? colors.racePrimary : colors.cyan}
+                strokeWidth={!showTracks ? 0 : isSelected ? 6 : 4}
+                tappable={showTracks}
                 onPress={() => {
+                  if (!showTracks) return;
                   setSelectedUser(null);
                   setSelectedId(s.id);
                 }}
               />
-              <Marker
-                coordinate={{ latitude: mid.lat, longitude: mid.lng }}
-                anchor={{ x: 0.5, y: 0.5 }}
-                onPress={() => {
-                  setSelectedUser(null);
-                  setSelectedId(s.id);
-                }}
-              >
-                <View style={[styles.trackLabel, isSelected && styles.trackLabelSelected]}>
-                  <Text style={styles.trackLabelText} numberOfLines={1}>
-                    {s.name}
-                  </Text>
-                </View>
-              </Marker>
+              {showTracks && (
+                <Marker
+                  coordinate={{ latitude: mid.lat, longitude: mid.lng }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  onPress={() => {
+                    setSelectedUser(null);
+                    setSelectedId(s.id);
+                  }}
+                >
+                  <View style={[styles.trackLabel, isSelected && styles.trackLabelSelected]}>
+                    <Text style={styles.trackLabelText} numberOfLines={1}>
+                      {s.name}
+                    </Text>
+                  </View>
+                </Marker>
+              )}
             </React.Fragment>
           );
-          })}
+        })}
       </MapView>
 
       {/* Two rows: your name gets the full width on its own row (it used to

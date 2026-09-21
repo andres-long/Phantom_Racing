@@ -192,6 +192,31 @@ export type TripHistoryEntry = {
   recordedAt: string;
 };
 
+// ---- Worldwide stats leaderboard (Stats screen's WORLD tab) ------------
+
+export type GlobalStatsMetric = "topSpeed" | "distance" | "avgSpeed";
+
+export type GlobalStatsEntry = {
+  rank: number;
+  isMe: boolean;
+  displayName: string;
+  topSpeedKmh: number;
+  distanceM: number;
+  avgSpeedKmh: number;
+  driveCount: number;
+};
+
+export type GlobalStatsResponse = {
+  metric: GlobalStatsMetric;
+  totalRacers: number;
+  // Average speed only ranks racers with at least this much driving.
+  minDistanceM: number;
+  leaderboard: GlobalStatsEntry[];
+  // Your own row and rank, even if you're outside the top list; null if
+  // you haven't recorded a qualifying drive yet.
+  me: GlobalStatsEntry | null;
+};
+
 // Root navigator param list.
 export type RootStackParamList = {
   Welcome: undefined;

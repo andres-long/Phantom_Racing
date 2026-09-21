@@ -20,6 +20,8 @@ import {
   VoiceSignal,
   VoiceSignalKind,
   BlockedPlayer,
+  GlobalStatsMetric,
+  GlobalStatsResponse,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -158,6 +160,12 @@ export const api = {
   getUserRuns: (deviceId: string) => request<RunHistoryEntry[]>(`/api/users/${deviceId}/runs`),
 
   getUserTrips: (deviceId: string) => request<TripHistoryEntry[]>(`/api/users/${deviceId}/trips`),
+
+  // Everyone's lifetime stats ranked by one metric, plus your own rank.
+  getGlobalStats: (metric: GlobalStatsMetric, deviceId?: string) =>
+    request<GlobalStatsResponse>(
+      `/api/stats/global?metric=${metric}${deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ""}`
+    ),
 
   // "Go to a place" -- destination search (Places), routing (Directions),
   // and submitting the resulting drive as a tracked trip.

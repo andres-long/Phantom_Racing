@@ -803,6 +803,83 @@ route("GET", "/api/users/:deviceId/trips", async ({ res, params }) => {
   sendJson(res, 200, trips);
 });
 
+// ---- Worldwide stats leaderboard ------------------------------------------
+//
+// Everyone's lifetime numbers, same definitions as the personal Stats screen
+// (segment runs + Go To trips combined; average speed distance-weighted =
+// total distance / total time), ranked by one metric at a time. Returns the
+// top GLOBAL_STATS_LIMIT plus the caller's own entry and rank, so you can
+// see where you stand even when you're not in the top list.
+const GLOBAL_STATS_LIMIT = 50;
+// Average speed is only ranked for racers with at least this much driving,
+// so a single 100m sprint can't top the table on its own.
+const GLOBAL_AVG_MIN_DISTANCE_M = 1000;
+const GLOBAL_STATS_METRICS = ["topSpeed", "distance", "avgSpeed"];
+
+function computeGlobalStats(state) {
+  const byUser = new Map();
+  const add = (userId, distanceM, durationMs, maxSpeedKmh) => {
+    let s = byUser.get(userId);
+    if (!s) {
+      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0 };
+      byUser.set(userId, s);
+    }
+    if (Number.isFinite(distanceM) && distanceM > 0) s.distanceM += distanceM;
+    if (Number.isFinite(durationMs) && durationMs > 0) s.durationMs += durationMs;
+    if (Number.isFinite(maxSpeedKmh) && maxSpeedKmh > s.topSpeedKmh) s.topSpeedKmh = maxSpeedKmh;
+    s.driveCount += 1;
+  };
+  for (const r of state.runs || []) {
+    add(r.userId, geo.polylineLength(r.trace || []), r.durationMs, r.maxSpeedKmh ?? 0);
+  }
+  for (const t of state.trips || []) {
+    add(t.userId, t.distanceM, t.durationMs, t.maxSpeedKmh ?? 0);
+  }
+
+  const entries = [];
+  for (const [userId, s] of byUser) {
+    const user = state.users.find((u) => u.id === userId);
+    if (!user) continue;
+    entries.push({
+      userId,
+      displayName: user.displayName,
+      topSpeedKmh: Math.round(s.topSpeedKmh * 10) / 10,
+      distanceM: Math.round(s.distanceM),
+      avgSpeedKmh: s.durationMs > 0 ? Math.round((s.distanceM / 1000 / (s.durationMs / 3_600_000)) * 10) / 10 : 0,
+      driveCount: s.driveCount,
+    });
+  }
+  return entries;
+}
+
+route("GET", "/api/stats/global", async ({ res, query }) => {
+  const requested = query.get("metric");
+  const metric = GLOBAL_STATS_METRICS.includes(requested) ? requested : "topSpeed";
+  const deviceId = query.get("deviceId");
+  const state = await db.load();
+  const me = deviceId ? findUserByDevice(state, deviceId) : null;
+
+  const valueOf = (e) =>
+    metric === "topSpeed" ? e.topSpeedKmh : metric === "distance" ? e.distanceM : e.avgSpeedKmh;
+  const eligible = computeGlobalStats(state)
+    .filter((e) => (metric === "avgSpeed" ? e.distanceM >= GLOBAL_AVG_MIN_DISTANCE_M : true))
+    .filter((e) => valueOf(e) > 0)
+    .sort((a, b) => valueOf(b) - valueOf(a) || a.displayName.localeCompare(b.displayName));
+
+  const ranked = eligible.map((e, i) => {
+    const { userId, ...rest } = e;
+    return { rank: i + 1, isMe: !!me && userId === me.id, ...rest };
+  });
+
+  sendJson(res, 200, {
+    metric,
+    totalRacers: ranked.length,
+    minDistanceM: metric === "avgSpeed" ? GLOBAL_AVG_MIN_DISTANCE_M : 0,
+    leaderboard: ranked.slice(0, GLOBAL_STATS_LIMIT),
+    me: ranked.find((e) => e.isMe) || null,
+  });
+});
+
 // A presence record older than this is treated as "not online" and dropped
 // from query results -- the mobile app heartbeats roughly every 5s while
 // foregrounded, so this gives room for one missed beat (a brief network

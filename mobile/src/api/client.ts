@@ -14,6 +14,9 @@ import {
   MapBounds,
   RunHistoryEntry,
   TripHistoryEntry,
+  RaceChallenge,
+  RaceDistanceKey,
+  ChatThreadResponse,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -163,5 +166,64 @@ export const api = {
   queryPresence: (deviceId: string, bounds: MapBounds) =>
     request<{ users: PresenceUser[] }>(
       `/api/presence?deviceId=${encodeURIComponent(deviceId)}&north=${bounds.north}&south=${bounds.south}&east=${bounds.east}&west=${bounds.west}`
+    ),
+
+  // Live race challenges -- head-to-head against a specific nearby player,
+  // addressed by deviceId (the same id presence markers already carry, so a
+  // tap on a marker needs no extra lookup).
+  createRaceChallenge: (fromDeviceId: string, toDeviceId: string, distanceKey: RaceDistanceKey) =>
+    request<RaceChallenge>("/api/races", {
+      method: "POST",
+      body: JSON.stringify({ fromDeviceId, toDeviceId, distanceKey }),
+    }),
+
+  getIncomingRaceChallenges: (deviceId: string) =>
+    request<RaceChallenge[]>(`/api/races/incoming?deviceId=${encodeURIComponent(deviceId)}`),
+
+  getRaceChallenge: (raceId: string, deviceId: string) =>
+    request<RaceChallenge>(`/api/races/${raceId}?deviceId=${encodeURIComponent(deviceId)}`),
+
+  respondToRaceChallenge: (raceId: string, deviceId: string, accept: boolean) =>
+    request<RaceChallenge>(`/api/races/${raceId}/respond`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId, accept }),
+    }),
+
+  postRaceProgress: (raceId: string, deviceId: string, distanceM: number, elapsedMs: number, speedKmh: number) =>
+    request<RaceChallenge>(`/api/races/${raceId}/progress`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId, distanceM, elapsedMs, speedKmh }),
+    }),
+
+  finishRace: (
+    raceId: string,
+    deviceId: string,
+    durationMs: number,
+    distanceM: number,
+    avgSpeedKmh: number,
+    maxSpeedKmh: number
+  ) =>
+    request<RaceChallenge>(`/api/races/${raceId}/finish`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId, durationMs, distanceM, avgSpeedKmh, maxSpeedKmh }),
+    }),
+
+  cancelRace: (raceId: string, deviceId: string) =>
+    request<RaceChallenge>(`/api/races/${raceId}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId }),
+    }),
+
+  // Proximity chat -- a 1:1 thread with a specific nearby player, reached
+  // the same way as a race challenge (by deviceId).
+  sendMessage: (fromDeviceId: string, toDeviceId: string, text: string) =>
+    request<{ id: string; text: string; createdAt: string; mine: boolean }>("/api/messages", {
+      method: "POST",
+      body: JSON.stringify({ fromDeviceId, toDeviceId, text }),
+    }),
+
+  getMessages: (deviceId: string, withDeviceId: string) =>
+    request<ChatThreadResponse>(
+      `/api/messages?deviceId=${encodeURIComponent(deviceId)}&withDeviceId=${encodeURIComponent(withDeviceId)}`
     ),
 };

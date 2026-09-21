@@ -108,6 +108,48 @@ export type PresenceUser = {
 
 export type MapBounds = { north: number; south: number; east: number; west: number };
 
+// ---- Live race challenges (head-to-head against a nearby player) ------
+
+export type RaceDistanceKey = "quarter" | "mile" | "five";
+
+export type RaceProgress = { distanceM: number; elapsedMs: number; speedKmh: number; updatedAt: string };
+
+export type RaceResult = {
+  durationMs: number;
+  distanceM: number | null;
+  avgSpeedKmh: number;
+  maxSpeedKmh: number;
+  finishedAt: string;
+};
+
+export type RaceStatus = "pending" | "accepted" | "declined" | "cancelled" | "expired" | "finished";
+
+// Always from the current viewer's own side -- "my"/"opponent" rather than
+// "from"/"to" -- see raceSummary() on the backend for why.
+export type RaceChallenge = {
+  id: string;
+  distanceKey: RaceDistanceKey;
+  distanceM: number;
+  distanceLabel: string;
+  status: RaceStatus;
+  createdAt: string;
+  raceStartAt: string | null;
+  isChallenger: boolean;
+  fromDisplayName: string;
+  toDisplayName: string;
+  opponentDisplayName: string;
+  myProgress: RaceProgress | null;
+  opponentProgress: RaceProgress | null;
+  myResult: RaceResult | null;
+  opponentResult: RaceResult | null;
+};
+
+// ---- Proximity chat (message a nearby player) --------------------------
+
+export type ChatMessage = { id: string; text: string; createdAt: string; mine: boolean };
+
+export type ChatThreadResponse = { withDisplayName: string; messages: ChatMessage[] };
+
 // ---- Personal drive history (feeds the Stats screen) ------------------
 
 export type RunHistoryEntry = {
@@ -153,4 +195,7 @@ export type RootStackParamList = {
   };
   GoSummary: { result: SubmitTripResponse };
   Stats: undefined;
+  RaceLive: { raceId: string };
+  RaceResult: { raceId: string };
+  Chat: { withDeviceId: string; withDisplayName: string };
 };

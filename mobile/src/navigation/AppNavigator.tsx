@@ -18,6 +18,9 @@ import GoToScreen from "../screens/GoToScreen";
 import GoRaceScreen from "../screens/GoRaceScreen";
 import GoSummaryScreen from "../screens/GoSummaryScreen";
 import StatsScreen from "../screens/StatsScreen";
+import RaceLiveScreen from "../screens/RaceLiveScreen";
+import RaceResultScreen from "../screens/RaceResultScreen";
+import ChatScreen from "../screens/ChatScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -102,6 +105,17 @@ export default function AppNavigator() {
               name="Stats"
               component={StatsScreen}
               options={{ ...headerOptions, headerShown: true, title: "YOUR STATS" }}
+            />
+            <Stack.Screen name="RaceLive" component={RaceLiveScreen} />
+            <Stack.Screen name="RaceResult" component={RaceResultScreen} />
+            <Stack.Screen
+              name="Chat"
+              component={ChatScreen}
+              options={({ route }) => ({
+                ...headerOptions,
+                headerShown: true,
+                title: route.params.withDisplayName,
+              })}
             />
           </>
         )}

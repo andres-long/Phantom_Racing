@@ -23,7 +23,7 @@ const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || "need_for_speed";
 const STATE_DOC_ID = "state";
 
 function emptyState() {
-  return { users: [], segments: [], runs: [], trips: [] };
+  return { users: [], segments: [], runs: [], trips: [], races: [], messages: [] };
 }
 
 // ---- JSON-file backend (local dev / no MONGODB_URI set) -------------------
@@ -141,6 +141,8 @@ async function loadMongo() {
     segments: doc.segments || [],
     runs: doc.runs || [],
     trips: doc.trips || [],
+    races: doc.races || [],
+    messages: doc.messages || [],
   };
 }
 
@@ -148,7 +150,16 @@ async function saveMongo(state) {
   const db = await getMongoDb();
   await db.collection("appState").updateOne(
     { _id: STATE_DOC_ID },
-    { $set: { users: state.users, segments: state.segments, runs: state.runs, trips: state.trips || [] } },
+    {
+      $set: {
+        users: state.users,
+        segments: state.segments,
+        runs: state.runs,
+        trips: state.trips || [],
+        races: state.races || [],
+        messages: state.messages || [],
+      },
+    },
     { upsert: true }
   );
 }

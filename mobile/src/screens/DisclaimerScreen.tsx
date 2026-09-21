@@ -5,11 +5,12 @@ import { colors, fonts } from "../theme";
 import GridBackground from "../components/GridBackground";
 import NeonButton from "../components/NeonButton";
 
-// First-launch gate. This app is intentionally "ghost racing" (you vs.
-// recorded times on a road you already drive), not live head-to-head racing
-// against strangers in real time -- see the project README for why. This
-// screen exists to make that framing explicit to every user, not just bury
-// it in a terms-of-service nobody reads.
+// First-launch gate. The core mode is "ghost racing" (you vs. recorded
+// times on a road you already drive); nearby players can also challenge
+// each other to a live head-to-head race, timed the same way -- first to
+// cover the chosen distance. This screen exists to make the safety framing
+// explicit to every user either way, not just bury it in a terms-of-service
+// nobody reads.
 export default function DisclaimerScreen() {
   const { acceptDisclaimer } = useUser();
 
@@ -20,8 +21,9 @@ export default function DisclaimerScreen() {
         <Text style={styles.title}>BEFORE YOU RACE</Text>
         <Text style={styles.paragraph}>
           This app times you against your own or other drivers' recorded runs on stretches of
-          road ("segments") -- like a leaderboard, not a live race. You never share the road at
-          the same moment as your "opponent."
+          road ("segments") -- like a leaderboard. If another racer is nearby and online, you can
+          also challenge them directly to a live race, so you may share the road with your
+          opponent at the same time -- treat that exactly like any other traffic around you.
         </Text>
         <Text style={styles.paragraph}>
           Obey all traffic laws and speed limits at all times. Never look at your phone while

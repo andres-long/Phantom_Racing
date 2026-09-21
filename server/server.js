@@ -28,6 +28,25 @@ const PORT = process.env.PORT || 4000;
 // that need it instead of a confusing Google API failure.
 const GOOGLE_SERVER_API_KEY = process.env.GOOGLE_SERVER_API_KEY;
 
+// Live head-to-head race challenges: fixed set of distances, matching the
+// classic drag-race lengths the user asked for. Kept as a name->meters map
+// (not user-editable) so both server and client always agree on exactly what
+// "1 MILE" means -- mirrored client-side in mobile/src/raceDistances.ts.
+const RACE_DISTANCES = {
+  quarter: { meters: 402.336, label: "1/4 MILE" },
+  mile: { meters: 1609.344, label: "1 MILE" },
+  five: { meters: 8046.72, label: "5 MILES" },
+};
+// A race request left unanswered this long is treated as expired -- the two
+// racers are physically near each other right now, so a request that sits
+// unanswered for minutes stops meaning anything (they may have driven apart
+// already).
+const RACE_REQUEST_TIMEOUT_MS = 45000;
+// Gap between "accepted" and the actual start, so both phones can count down
+// from the same server-issued timestamp rather than starting the instant
+// each individual device happens to receive the accept.
+const RACE_COUNTDOWN_MS = 5000;
+
 // Minimal HTTPS GET-JSON helper, built on Node's own `https` (no axios/
 // node-fetch) to keep this backend's zero-dependency design -- used only
 // for the handful of Google Places/Directions calls below.
@@ -224,6 +243,59 @@ function canAccessSegment(dbState, segment, deviceId) {
   if (!segment.isPrivate) return true;
   const caller = deviceId ? findUserByDevice(dbState, deviceId) : null;
   return !!caller && segment.creatorId === caller.id;
+}
+
+// A pending request nobody's answered within RACE_REQUEST_TIMEOUT_MS is
+// stale -- flips it to "expired" in place. Called at the top of every route
+// that reads or mutates a race, so nothing needs a background cleanup job;
+// the flip just happens (and gets persisted, since every such route saves
+// state afterward) the next time anyone touches that race.
+function normalizeRaceStatus(race) {
+  if (race.status === "pending" && Date.now() - new Date(race.createdAt).getTime() > RACE_REQUEST_TIMEOUT_MS) {
+    race.status = "expired";
+  }
+  return race;
+}
+
+// Client-facing view of a race challenge, from one specific viewer's side --
+// "my" vs "opponent" rather than "from" vs "to", so the same shape works
+// whether the viewer sent or received the challenge, and the client never
+// has to juggle which field is which.
+function raceSummary(dbState, race, viewerUserId) {
+  const opponentId = race.fromUserId === viewerUserId ? race.toUserId : race.fromUserId;
+  const fromUser = dbState.users.find((u) => u.id === race.fromUserId);
+  const toUser = dbState.users.find((u) => u.id === race.toUserId);
+  const opponentUser = dbState.users.find((u) => u.id === opponentId);
+  const dist = RACE_DISTANCES[race.distanceKey];
+  return {
+    id: race.id,
+    distanceKey: race.distanceKey,
+    distanceM: dist ? dist.meters : race.distanceM,
+    distanceLabel: dist ? dist.label : "",
+    status: race.status,
+    createdAt: race.createdAt,
+    raceStartAt: race.raceStartAt || null,
+    isChallenger: race.fromUserId === viewerUserId,
+    fromDisplayName: fromUser?.displayName ?? "Unknown",
+    toDisplayName: toUser?.displayName ?? "Unknown",
+    opponentDisplayName: opponentUser?.displayName ?? "Unknown",
+    myProgress: race.progress?.[viewerUserId] ?? null,
+    opponentProgress: race.progress?.[opponentId] ?? null,
+    myResult: race.results?.[viewerUserId] ?? null,
+    opponentResult: race.results?.[opponentId] ?? null,
+  };
+}
+
+// Client-facing view of a chat message, from one specific viewer's side --
+// just enough for the client to know which side of the thread to render it
+// on, without exposing raw user ids it doesn't need.
+function messageSummary(msg, viewerUserId) {
+  return {
+    id: msg.id,
+    text: msg.text,
+    createdAt: msg.createdAt,
+    mine: msg.fromUserId === viewerUserId,
+  };
 }
 
 const routes = [];
@@ -792,6 +864,284 @@ route("GET", "/api/presence", async ({ res, query }) => {
     maxAgeMs: PRESENCE_MAX_AGE_MS,
   });
   sendJson(res, 200, { users });
+});
+
+// ---- Live race challenges (head-to-head against a nearby player) ---------
+//
+// A live, real-time race against a specific other signed-in user, not the
+// async ghost-racing every other mode in this app uses. Distance is fixed to
+// one of RACE_DISTANCES (no predefined route/road needed) -- each racer's
+// own GPS trace is measured as they drive, and whoever covers the target
+// distance first wins, so this works on whatever road the two of you happen
+// to be on rather than needing a shared pre-recorded segment.
+
+route("POST", "/api/races", async ({ res, body }) => {
+  const fromDeviceId = (body.fromDeviceId || "").trim();
+  const toDeviceId = (body.toDeviceId || "").trim();
+  const distanceKey = body.distanceKey;
+  if (!fromDeviceId || !toDeviceId || !RACE_DISTANCES[distanceKey]) {
+    return sendJson(res, 400, {
+      error: `fromDeviceId, toDeviceId, and a valid distanceKey (${Object.keys(RACE_DISTANCES).join(", ")}) are required`,
+    });
+  }
+
+  const state = await db.load();
+  const fromUser = findUserByDevice(state, fromDeviceId);
+  const toUser = findUserByDevice(state, toDeviceId);
+  if (!fromUser) return sendJson(res, 400, { error: "Unknown deviceId; register the user first." });
+  if (!toUser) return sendJson(res, 404, { error: "That player isn't available right now." });
+  if (fromUser.id === toUser.id) return sendJson(res, 400, { error: "You can't race yourself." });
+
+  const existing = state.races.find((r) => {
+    normalizeRaceStatus(r);
+    if (!["pending", "accepted"].includes(r.status)) return false;
+    return (
+      (r.fromUserId === fromUser.id && r.toUserId === toUser.id) ||
+      (r.fromUserId === toUser.id && r.toUserId === fromUser.id)
+    );
+  });
+  if (existing) {
+    return sendJson(res, 409, { error: "There's already an open race with this player." });
+  }
+
+  const race = {
+    id: db.id("race"),
+    fromUserId: fromUser.id,
+    toUserId: toUser.id,
+    distanceKey,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    respondedAt: null,
+    raceStartAt: null,
+    finishedAt: null,
+    progress: {},
+    results: {},
+  };
+  state.races.push(race);
+  await db.save(state);
+  sendJson(res, 201, raceSummary(state, race, fromUser.id));
+});
+
+// Brand-new incoming challenges for this user -- polled from Home so a race
+// request from a nearby player can surface as a prompt no matter what screen
+// they're on (as long as they're signed in and the app is open).
+route("GET", "/api/races/incoming", async ({ res, query }) => {
+  const deviceId = (query.get("deviceId") || "").trim();
+  if (!deviceId) return sendJson(res, 400, { error: "Missing deviceId." });
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 404, { error: "User not found" });
+
+  let changed = false;
+  const incoming = state.races.filter((r) => {
+    const before = r.status;
+    normalizeRaceStatus(r);
+    if (r.status !== before) changed = true;
+    return r.toUserId === me.id && r.status === "pending";
+  });
+  if (changed) await db.save(state);
+  sendJson(
+    res,
+    200,
+    incoming.map((r) => raceSummary(state, r, me.id))
+  );
+});
+
+route("GET", "/api/races/:id", async ({ res, params, query }) => {
+  const deviceId = (query.get("deviceId") || "").trim();
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 404, { error: "User not found" });
+
+  const race = state.races.find((r) => r.id === params.id);
+  if (!race || (race.fromUserId !== me.id && race.toUserId !== me.id)) {
+    return sendJson(res, 404, { error: "Race not found" });
+  }
+  const before = race.status;
+  normalizeRaceStatus(race);
+  if (race.status !== before) await db.save(state);
+  sendJson(res, 200, raceSummary(state, race, me.id));
+});
+
+route("POST", "/api/races/:id/respond", async ({ res, params, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+
+  const race = state.races.find((r) => r.id === params.id);
+  if (!race || (race.fromUserId !== me.id && race.toUserId !== me.id)) {
+    return sendJson(res, 404, { error: "Race not found" });
+  }
+  if (race.toUserId !== me.id) {
+    return sendJson(res, 403, { error: "Only the challenged player can respond to this." });
+  }
+  normalizeRaceStatus(race);
+  if (race.status !== "pending") {
+    return sendJson(res, 409, { error: "This race request is no longer available." });
+  }
+
+  race.respondedAt = new Date().toISOString();
+  if (body.accept) {
+    race.status = "accepted";
+    race.raceStartAt = new Date(Date.now() + RACE_COUNTDOWN_MS).toISOString();
+  } else {
+    race.status = "declined";
+  }
+  await db.save(state);
+  sendJson(res, 200, raceSummary(state, race, me.id));
+});
+
+// Live progress update during a race (posted every couple of seconds by
+// both racers) -- also doubles as the poll for the opponent's latest
+// progress, since the response is the same raceSummary either side would
+// get from GET /api/races/:id, saving a round trip during the race itself.
+route("POST", "/api/races/:id/progress", async ({ res, params, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const distanceM = Number(body.distanceM);
+  const elapsedMs = Number(body.elapsedMs);
+  const speedKmh = Number(body.speedKmh);
+  if (!Number.isFinite(distanceM) || !Number.isFinite(elapsedMs)) {
+    return sendJson(res, 400, { error: "distanceM and elapsedMs are required" });
+  }
+
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+
+  const race = state.races.find((r) => r.id === params.id);
+  if (!race || (race.fromUserId !== me.id && race.toUserId !== me.id)) {
+    return sendJson(res, 404, { error: "Race not found" });
+  }
+  if (race.status !== "accepted") {
+    return sendJson(res, 409, { error: "This race isn't currently active." });
+  }
+
+  race.progress[me.id] = {
+    distanceM: Math.max(0, distanceM),
+    elapsedMs: Math.max(0, elapsedMs),
+    speedKmh: Number.isFinite(speedKmh) ? Math.max(0, speedKmh) : 0,
+    updatedAt: new Date().toISOString(),
+  };
+  await db.save(state);
+  sendJson(res, 200, raceSummary(state, race, me.id));
+});
+
+route("POST", "/api/races/:id/finish", async ({ res, params, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const durationMs = Number(body.durationMs);
+  const distanceM = Number(body.distanceM);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return sendJson(res, 400, { error: "A valid durationMs is required" });
+  }
+
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+
+  const race = state.races.find((r) => r.id === params.id);
+  if (!race || (race.fromUserId !== me.id && race.toUserId !== me.id)) {
+    return sendJson(res, 404, { error: "Race not found" });
+  }
+  if (race.status !== "accepted") {
+    return sendJson(res, 409, { error: "This race isn't currently active." });
+  }
+
+  const rawMaxSpeed = Number(body.maxSpeedKmh);
+  const rawAvgSpeed = Number(body.avgSpeedKmh);
+  race.results[me.id] = {
+    durationMs,
+    distanceM: Number.isFinite(distanceM) ? distanceM : null,
+    avgSpeedKmh: Number.isFinite(rawAvgSpeed) ? Math.round(rawAvgSpeed * 10) / 10 : 0,
+    maxSpeedKmh: Number.isFinite(rawMaxSpeed) ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0,
+    finishedAt: new Date().toISOString(),
+  };
+
+  if (race.results[race.fromUserId] && race.results[race.toUserId]) {
+    race.status = "finished";
+    race.finishedAt = new Date().toISOString();
+  }
+  await db.save(state);
+  sendJson(res, 200, raceSummary(state, race, me.id));
+});
+
+// Either racer can always bail -- a request still pending, or a race
+// already under way. There's no penalty tracked for this; it's the safety
+// valve that matters (never trap someone into finishing a race they don't
+// want to keep driving).
+route("POST", "/api/races/:id/cancel", async ({ res, params, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+
+  const race = state.races.find((r) => r.id === params.id);
+  if (!race || (race.fromUserId !== me.id && race.toUserId !== me.id)) {
+    return sendJson(res, 404, { error: "Race not found" });
+  }
+  if (["pending", "accepted"].includes(race.status)) {
+    race.status = "cancelled";
+    race.finishedAt = new Date().toISOString();
+  }
+  await db.save(state);
+  sendJson(res, 200, raceSummary(state, race, me.id));
+});
+
+// ---- Proximity chat (message a nearby player) ------------------------
+
+route("POST", "/api/messages", async ({ res, body }) => {
+  const fromDeviceId = (body.fromDeviceId || "").trim();
+  const toDeviceId = (body.toDeviceId || "").trim();
+  const text = (body.text || "").trim();
+  if (!fromDeviceId || !toDeviceId || !text) {
+    return sendJson(res, 400, { error: "fromDeviceId, toDeviceId, and text are required" });
+  }
+  if (text.length > 500) {
+    return sendJson(res, 400, { error: "Message is too long (500 characters max)." });
+  }
+
+  const state = await db.load();
+  const from = findUserByDevice(state, fromDeviceId);
+  const to = findUserByDevice(state, toDeviceId);
+  if (!from) return sendJson(res, 400, { error: "Unknown deviceId; register the user first." });
+  if (!to) return sendJson(res, 404, { error: "That player isn't available right now." });
+
+  const msg = {
+    id: db.id("msg"),
+    fromUserId: from.id,
+    toUserId: to.id,
+    text,
+    createdAt: new Date().toISOString(),
+  };
+  state.messages.push(msg);
+  await db.save(state);
+  sendJson(res, 201, messageSummary(msg, from.id));
+});
+
+// Whole thread with one specific other player, oldest first. Re-fetched in
+// full on each poll rather than incrementally -- thread sizes are small
+// enough for this app's scale that the simplicity is worth it.
+route("GET", "/api/messages", async ({ res, query }) => {
+  const deviceId = (query.get("deviceId") || "").trim();
+  const withDeviceId = (query.get("withDeviceId") || "").trim();
+  if (!deviceId || !withDeviceId) return sendJson(res, 400, { error: "deviceId and withDeviceId are required" });
+
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  const other = findUserByDevice(state, withDeviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+  if (!other) return sendJson(res, 404, { error: "That player isn't available right now." });
+
+  const thread = state.messages
+    .filter(
+      (m) =>
+        (m.fromUserId === me.id && m.toUserId === other.id) ||
+        (m.fromUserId === other.id && m.toUserId === me.id)
+    )
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    .map((m) => messageSummary(m, me.id));
+
+  sendJson(res, 200, { withDisplayName: other.displayName, messages: thread });
 });
 
 const server = http.createServer((req, res) => {

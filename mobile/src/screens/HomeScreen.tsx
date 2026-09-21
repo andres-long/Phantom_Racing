@@ -5,13 +5,22 @@ import * as Location from "expo-location";
 import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList, SegmentSummary, LatLng, PresenceUser, MapBounds } from "../types";
+import {
+  RootStackParamList,
+  SegmentSummary,
+  LatLng,
+  PresenceUser,
+  MapBounds,
+  RaceDistanceKey,
+  RaceChallenge,
+} from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { cumulativeDistances, projectOntoPolyline, pointAtDistance, haversine } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort, formatDistanceLong } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
+import { RACE_DISTANCES } from "../raceDistances";
 import NeonButton from "../components/NeonButton";
 import VehicleMarker from "../components/VehicleMarker";
 
@@ -82,6 +91,20 @@ export default function HomeScreen({ navigation }: Props) {
   // inside the current map region, not a fixed "nearby" radius like tracks.
   const [otherUsers, setOtherUsers] = useState<PresenceUser[]>([]);
 
+  // Live race challenges -- tapping a nearby player's marker selects them
+  // (mirrors selectedId/selected for tracks, just for people instead of
+  // roads); raceStep drives what the selected-player card shows next.
+  const [selectedUser, setSelectedUser] = useState<PresenceUser | null>(null);
+  const [raceStep, setRaceStep] = useState<"closed" | "distance" | "waiting">("closed");
+  const [creatingChallenge, setCreatingChallenge] = useState(false);
+  const [pendingRaceId, setPendingRaceId] = useState<string | null>(null);
+  const [pendingDistanceLabel, setPendingDistanceLabel] = useState<string | null>(null);
+  const [raceError, setRaceError] = useState<string | null>(null);
+  // A race request someone else sent *to* us -- surfaced as its own overlay
+  // regardless of what else is selected, since it can arrive at any time.
+  const [incomingRace, setIncomingRace] = useState<RaceChallenge | null>(null);
+  const [respondingIncoming, setRespondingIncoming] = useState(false);
+
   // Whether the map should keep recentering on you as you move. On by
   // default (that's the whole point of this fix -- your position marker
   // used to drift out of view within a few seconds of driving). Turned off
@@ -138,6 +161,22 @@ export default function HomeScreen({ navigation }: Props) {
       // just a background refresh.
     } finally {
       presenceInFlightRef.current = false;
+    }
+  }, []);
+
+  // Polls for race requests addressed to us. Piggybacks on the same cadence
+  // as presence (see the focus-effect interval below) rather than a second
+  // timer. Never clobbers a challenge already on screen -- if the driver is
+  // mid-decision on one, a newer one just waits for the next tick after they
+  // resolve it, instead of yanking the card out from under them.
+  const refreshIncomingRaces = useCallback(async () => {
+    const deviceId = userRef.current?.deviceId;
+    if (!deviceId) return;
+    try {
+      const incoming = await api.getIncomingRaceChallenges(deviceId);
+      setIncomingRace((current) => (current ? current : incoming.length > 0 ? incoming[0] : null));
+    } catch {
+      // Best-effort, same as presence -- next tick retries.
     }
   }, []);
 
@@ -213,9 +252,11 @@ export default function HomeScreen({ navigation }: Props) {
       // for as long as this screen stays focused.
       sendHeartbeatTick();
       refreshPresence();
+      refreshIncomingRaces();
       const presenceTimer = setInterval(() => {
         sendHeartbeatTick();
         refreshPresence();
+        refreshIncomingRaces();
       }, HEARTBEAT_INTERVAL_MS);
 
       return () => {
@@ -224,8 +265,49 @@ export default function HomeScreen({ navigation }: Props) {
         subscriptionRef.current = null;
         clearInterval(presenceTimer);
       };
-    }, [loadSegments, navigation, sendHeartbeatTick, refreshPresence])
+    }, [loadSegments, navigation, sendHeartbeatTick, refreshPresence, refreshIncomingRaces])
   );
+
+  // Polls the race we just challenged someone to, waiting for them to
+  // accept/decline (or for it to time out). Only runs while we have an
+  // outstanding request -- pendingRaceId is cleared the moment it resolves,
+  // which tears this effect down rather than leaving a dangling interval.
+  useEffect(() => {
+    if (!pendingRaceId || !user) return;
+    let cancelled = false;
+    const deviceId = user.deviceId;
+    const raceId = pendingRaceId;
+    const tick = async () => {
+      try {
+        const updated = await api.getRaceChallenge(raceId, deviceId);
+        if (cancelled) return;
+        if (updated.status === "accepted") {
+          setPendingRaceId(null);
+          setRaceStep("closed");
+          setSelectedUser(null);
+          navigation.navigate("RaceLive", { raceId: updated.id });
+        } else if (updated.status !== "pending") {
+          setPendingRaceId(null);
+          setRaceStep("closed");
+          setRaceError(
+            updated.status === "declined"
+              ? `${updated.opponentDisplayName} declined the race.`
+              : updated.status === "expired"
+              ? "Race request expired -- they didn't respond in time."
+              : "Race request was cancelled."
+          );
+        }
+      } catch {
+        // Transient network hiccup -- next tick retries.
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [pendingRaceId, user, navigation]);
 
   const nearby: NearbySegment[] = useMemo(() => {
     if (!userPos) return [];
@@ -263,6 +345,48 @@ export default function HomeScreen({ navigation }: Props) {
 
   const formatDistance = (m: number) => `${formatDistanceShort(m, units)} away`;
 
+  const handleSelectDistance = async (distanceKey: RaceDistanceKey) => {
+    if (!user || !selectedUser || creatingChallenge) return;
+    setCreatingChallenge(true);
+    setRaceError(null);
+    try {
+      const race = await api.createRaceChallenge(user.deviceId, selectedUser.deviceId, distanceKey);
+      setPendingRaceId(race.id);
+      setPendingDistanceLabel(race.distanceLabel);
+      setRaceStep("waiting");
+    } catch (e: any) {
+      setRaceError(e.message || "Couldn't send the race request.");
+      setRaceStep("closed");
+    } finally {
+      setCreatingChallenge(false);
+    }
+  };
+
+  const cancelOutgoingRace = () => {
+    if (!user || !pendingRaceId) return;
+    const raceId = pendingRaceId;
+    setPendingRaceId(null);
+    setRaceStep("closed");
+    api.cancelRace(raceId, user.deviceId).catch(() => {});
+  };
+
+  const respondIncoming = async (accept: boolean) => {
+    if (!user || !incomingRace || respondingIncoming) return;
+    setRespondingIncoming(true);
+    const race = incomingRace;
+    try {
+      const updated = await api.respondToRaceChallenge(race.id, user.deviceId, accept);
+      setIncomingRace(null);
+      if (accept) {
+        navigation.navigate("RaceLive", { raceId: updated.id });
+      }
+    } catch {
+      setIncomingRace(null);
+    } finally {
+      setRespondingIncoming(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <MapView
@@ -271,7 +395,12 @@ export default function HomeScreen({ navigation }: Props) {
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
         initialRegion={FALLBACK_REGION}
-        onPress={() => setSelectedId(null)}
+        onPress={() => {
+          setSelectedId(null);
+          setSelectedUser(null);
+          setRaceStep("closed");
+          setRaceError(null);
+        }}
         onPanDrag={() => {
           followRef.current = false;
         }}
@@ -302,6 +431,12 @@ export default function HomeScreen({ navigation }: Props) {
             rotation={u.heading ?? 0}
             flat={u.heading != null}
             tracksViewChanges={false}
+            onPress={() => {
+              setSelectedId(null);
+              setRaceStep("closed");
+              setRaceError(null);
+              setSelectedUser(u);
+            }}
           >
             <View style={styles.otherUserWrap}>
               <VehicleMarker vehicleStyle="arrow" size={28} color={colors.racePrimary} />
@@ -324,12 +459,18 @@ export default function HomeScreen({ navigation }: Props) {
                 strokeColor={isSelected ? colors.racePrimary : colors.cyan}
                 strokeWidth={isSelected ? 6 : 4}
                 tappable
-                onPress={() => setSelectedId(s.id)}
+                onPress={() => {
+                  setSelectedUser(null);
+                  setSelectedId(s.id);
+                }}
               />
               <Marker
                 coordinate={{ latitude: mid.lat, longitude: mid.lng }}
                 anchor={{ x: 0.5, y: 0.5 }}
-                onPress={() => setSelectedId(s.id)}
+                onPress={() => {
+                  setSelectedUser(null);
+                  setSelectedId(s.id);
+                }}
               >
                 <View style={[styles.trackLabel, isSelected && styles.trackLabelSelected]}>
                   <Text style={styles.trackLabelText} numberOfLines={1}>
@@ -414,6 +555,105 @@ export default function HomeScreen({ navigation }: Props) {
               label="LEADERBOARD"
               variant="outline"
               onPress={() => navigation.navigate("Leaderboard", { segmentId: selected.id, segmentName: selected.name })}
+              style={styles.cardButton}
+            />
+          </View>
+        </View>
+      )}
+
+      {selectedUser && (
+        <View style={styles.card}>
+          <Pressable
+            style={styles.cardClose}
+            onPress={() => {
+              setSelectedUser(null);
+              setRaceStep("closed");
+              setRaceError(null);
+            }}
+            hitSlop={8}
+          >
+            <Text style={styles.cardCloseText}>x</Text>
+          </Pressable>
+          <Text style={styles.cardTitle}>{selectedUser.displayName}</Text>
+
+          {raceStep === "closed" && (
+            <>
+              {raceError && <Text style={styles.raceErrorText}>{raceError}</Text>}
+              <Text style={styles.cardMeta}>Nearby right now</Text>
+              <View style={styles.cardActions}>
+                <NeonButton
+                  label="RACE"
+                  onPress={() => {
+                    setRaceError(null);
+                    setRaceStep("distance");
+                  }}
+                  style={styles.cardButton}
+                />
+                <NeonButton
+                  label="CHAT"
+                  variant="outline"
+                  onPress={() =>
+                    navigation.navigate("Chat", {
+                      withDeviceId: selectedUser.deviceId,
+                      withDisplayName: selectedUser.displayName,
+                    })
+                  }
+                  style={styles.cardButton}
+                />
+              </View>
+            </>
+          )}
+
+          {raceStep === "distance" && (
+            <>
+              <Text style={styles.cardMeta}>Pick a distance to race {selectedUser.displayName}</Text>
+              <View style={styles.distanceRow}>
+                {RACE_DISTANCES.map((d) => (
+                  <Pressable
+                    key={d.key}
+                    style={styles.distanceOption}
+                    onPress={() => handleSelectDistance(d.key)}
+                    disabled={creatingChallenge}
+                  >
+                    <Text style={styles.distanceOptionText}>{d.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              {creatingChallenge && <ActivityIndicator color={colors.cyan} style={{ marginTop: 10 }} />}
+            </>
+          )}
+
+          {raceStep === "waiting" && (
+            <>
+              <Text style={styles.cardMeta}>
+                Race request sent{pendingDistanceLabel ? ` (${pendingDistanceLabel})` : ""} -- waiting for{" "}
+                {selectedUser.displayName}...
+              </Text>
+              <ActivityIndicator color={colors.cyan} style={{ marginTop: 10, marginBottom: 10 }} />
+              <NeonButton label="CANCEL" variant="outline" onPress={cancelOutgoingRace} style={styles.cardButton} />
+            </>
+          )}
+        </View>
+      )}
+
+      {incomingRace && (
+        <View style={[styles.incomingCard, { top: insets.top + 56 }]}>
+          <Text style={styles.cardTitle}>Race request!</Text>
+          <Text style={styles.cardMeta}>
+            {incomingRace.opponentDisplayName} wants to race you -- {incomingRace.distanceLabel}
+          </Text>
+          <View style={styles.cardActions}>
+            <NeonButton
+              label="ACCEPT"
+              onPress={() => respondIncoming(true)}
+              disabled={respondingIncoming}
+              style={styles.cardButton}
+            />
+            <NeonButton
+              label="DECLINE"
+              variant="outline"
+              onPress={() => respondIncoming(false)}
+              disabled={respondingIncoming}
               style={styles.cardButton}
             />
           </View>
@@ -533,6 +773,25 @@ const styles = StyleSheet.create({
   cardMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
   cardActions: { flexDirection: "row", marginTop: 14, gap: 10 },
   cardButton: { flex: 1 },
+  raceErrorText: { color: colors.danger, fontSize: 12, marginBottom: 6, fontWeight: "600" },
+  distanceRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  distanceOption: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderColor: colors.cyan,
+    borderRadius: 6,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  distanceOptionText: { color: colors.cyan, fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },
+  incomingCard: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    ...panelStyle,
+    padding: 16,
+    borderColor: colors.racePrimary,
+  },
   fab: {
     position: "absolute",
     bottom: 24,

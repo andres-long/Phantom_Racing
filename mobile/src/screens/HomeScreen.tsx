@@ -75,7 +75,7 @@ function regionToBounds(region: Region): MapBounds {
 // Browsing the full list of every track ever recorded lives one tap away
 // (the "All tracks" button), since that's a secondary, occasional action.
 export default function HomeScreen({ navigation }: Props) {
-  const { user, vehicleStyle, incognito, voiceEnabled, units } = useUser();
+  const { user, vehicleStyle, incognito, voiceEnabled, units, showTracks, setShowTracks } = useUser();
   const { reportPosition, connectedPeers, talking, setTalking, micReady, micBlocked, retryMic } =
     useProximityVoiceContext();
   const [blocking, setBlocking] = useState(false);
@@ -699,7 +699,8 @@ export default function HomeScreen({ navigation }: Props) {
             </View>
           </Marker>
         ))}
-        {nearby.map((s) => {
+        {showTracks &&
+          nearby.map((s) => {
           const cumDist = cumulativeDistances(s.points);
           const mid = pointAtDistance(s.points, cumDist, cumDist[cumDist.length - 1] / 2);
           const isSelected = s.id === selectedId;
@@ -731,7 +732,7 @@ export default function HomeScreen({ navigation }: Props) {
               </Marker>
             </React.Fragment>
           );
-        })}
+          })}
       </MapView>
 
       {/* Two rows: your name gets the full width on its own row (it used to
@@ -782,6 +783,20 @@ export default function HomeScreen({ navigation }: Props) {
         )}
       </View>
 
+      {/* Show/hide recorded tracks on the map -- remembered between launches. */}
+      <Pressable
+        style={[styles.recenterButton, styles.tracksToggle, !showTracks && styles.tracksToggleOff, { bottom: hudBottom + 110 }]}
+        onPress={() => {
+          if (showTracks) setSelectedId(null);
+          setShowTracks(!showTracks);
+        }}
+        hitSlop={6}
+      >
+        <Text style={[styles.tracksToggleText, !showTracks && styles.tracksToggleTextOff]}>
+          {showTracks ? "TRACKS\nON" : "TRACKS\nOFF"}
+        </Text>
+      </Pressable>
+
       <Pressable style={[styles.recenterButton, { bottom: hudBottom + 58 }]} onPress={recenter}>
         <Text style={styles.recenterIcon}>o</Text>
       </Pressable>
@@ -798,7 +813,7 @@ export default function HomeScreen({ navigation }: Props) {
         <Text style={styles.nearbyCount}>
           {nearby.length === 0
             ? "No tracks nearby yet"
-            : `${nearby.length} track${nearby.length === 1 ? "" : "s"} nearby`}
+            : `${nearby.length} track${nearby.length === 1 ? "" : "s"} nearby${showTracks ? "" : " (hidden)"}`}
         </Text>
         {otherUsers.length > 0 && (
           <Text style={styles.onlineCount}>
@@ -832,7 +847,7 @@ export default function HomeScreen({ navigation }: Props) {
           </Pressable>
         ))}
 
-      {selected && (
+      {selected && showTracks && (
         <View style={[styles.card, { bottom: hudBottom }]}>
           <Pressable style={styles.cardClose} onPress={() => setSelectedId(null)} hitSlop={8}>
             <Text style={styles.cardCloseText}>x</Text>
@@ -1049,6 +1064,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  tracksToggle: { width: 44, height: 44, borderColor: colors.cyan },
+  tracksToggleOff: { borderColor: colors.panelBorder, opacity: 0.8 },
+  tracksToggleText: { color: colors.cyan, fontSize: 8, fontWeight: "800", textAlign: "center", letterSpacing: 0.3 },
+  tracksToggleTextOff: { color: colors.textMuted },
   recenterIcon: { color: colors.cyan, fontSize: 18, fontWeight: "800" },
   speedHud: {
     position: "absolute",

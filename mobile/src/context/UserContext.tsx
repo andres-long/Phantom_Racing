@@ -14,6 +14,7 @@ type UserContextValue = {
   incognito: boolean;
   voiceEnabled: boolean;
   units: Units;
+  showTracks: boolean;
   completeWelcome: () => Promise<void>;
   acceptDisclaimer: () => Promise<void>;
   register: (name: string, password: string) => Promise<void>;
@@ -23,6 +24,7 @@ type UserContextValue = {
   setIncognito: (value: boolean) => Promise<void>;
   setVoiceEnabled: (value: boolean) => Promise<void>;
   setUnits: (value: Units) => Promise<void>;
+  setShowTracks: (value: boolean) => Promise<void>;
   logOut: () => Promise<void>;
 };
 
@@ -50,6 +52,10 @@ const VOICE_ENABLED_KEY = "nfs.voiceEnabled";
 // nothing the backend needs to know about (it always stores/returns km/h
 // and meters; every screen converts at render time via ../utils/units).
 const UNITS_KEY = "nfs.units";
+// Whether recorded tracks are drawn on Home's map. Purely visual, local
+// per-device preference; hiding them doesn't affect anything else (auto-
+// start racing near a start line still works).
+const SHOW_TRACKS_KEY = "nfs.showTracks";
 
 export function UserProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -65,6 +71,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   // presence visibility defaults to on (incognito defaults false).
   const [voiceEnabled, setVoiceEnabledState] = useState(true);
   const [units, setUnitsState] = useState<Units>("metric");
+  const [showTracks, setShowTracksState] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -85,6 +92,10 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       const savedUnits = await AsyncStorage.getItem(UNITS_KEY);
       if (savedUnits === "metric" || savedUnits === "imperial") {
         setUnitsState(savedUnits);
+      }
+      const savedShowTracks = await AsyncStorage.getItem(SHOW_TRACKS_KEY);
+      if (savedShowTracks !== null) {
+        setShowTracksState(savedShowTracks === "true");
       }
 
       // A signed-in account, saved locally after register/login, so the
@@ -161,6 +172,11 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setUnitsState(value);
   };
 
+  const setShowTracks = async (value: boolean) => {
+    setShowTracksState(value);
+    await AsyncStorage.setItem(SHOW_TRACKS_KEY, value ? "true" : "false");
+  };
+
   return (
     <UserContext.Provider
       value={{
@@ -172,6 +188,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         incognito,
         voiceEnabled,
         units,
+        showTracks,
         completeWelcome,
         acceptDisclaimer,
         register,
@@ -181,6 +198,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         setIncognito,
         setVoiceEnabled,
         setUnits,
+        setShowTracks,
         logOut,
       }}
     >

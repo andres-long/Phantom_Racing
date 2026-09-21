@@ -92,6 +92,21 @@ export default function HomeScreen({ navigation }: Props) {
   );
   // Bumped by the banner's button to re-run the location setup below.
   const [locationRetry, setLocationRetry] = useState(0);
+
+  // Map-overlay redraw counter. On Android (new architecture), when another
+  // screen is pushed on top of Home and you come back -- e.g. Account to
+  // flip incognito -- the native map can silently drop the markers and
+  // polylines drawn on it, even though React still thinks they're there:
+  // you and the tracks "disappear" while "N tracks nearby" still counts
+  // them. Bumping this on every return re-keys every overlay, so React
+  // unmounts and re-adds them to the map from scratch.
+  const [overlayEpoch, setOverlayEpoch] = useState(0);
+  // Custom-view markers are snapshotted to a bitmap; with
+  // tracksViewChanges off, a snapshot taken before the SVG finished drawing
+  // stays blank forever. Keep tracking on briefly after each redraw, then
+  // turn it off again (leaving it on costs battery/perf).
+  const [markersSettled, setMarkersSettled] = useState(false);
+  const focusCountRef = useRef(0);
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
@@ -234,6 +249,12 @@ export default function HomeScreen({ navigation }: Props) {
   // whole time you're recording a run or looking at a leaderboard.
   useFocusEffect(
     useCallback(() => {
+      focusCountRef.current += 1;
+      // First focus is the initial mount -- nothing to redraw yet. After
+      // that, redraw once the screen is actually back (the native view is
+      // re-attached slightly after the focus event fires).
+      const redrawTimer =
+        focusCountRef.current > 1 ? setTimeout(() => setOverlayEpoch((n) => n + 1), 300) : null;
       loadSegments();
       let cancelled = false;
       let autoStarted = false;
@@ -340,6 +361,7 @@ export default function HomeScreen({ navigation }: Props) {
 
       return () => {
         cancelled = true;
+        if (redrawTimer) clearTimeout(redrawTimer);
         subscriptionRef.current?.remove();
         subscriptionRef.current = null;
         clearInterval(presenceTimer);
@@ -378,6 +400,21 @@ export default function HomeScreen({ navigation }: Props) {
       cancelled = true;
     };
   }, []);
+
+  // Same redraw when the app comes back from the background (switching
+  // apps, locking the phone), which can drop map overlays the same way.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") setTimeout(() => setOverlayEpoch((n) => n + 1), 300);
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    setMarkersSettled(false);
+    const t = setTimeout(() => setMarkersSettled(true), 1500);
+    return () => clearTimeout(t);
+  }, [overlayEpoch]);
 
   const fixLocation = async () => {
     if (locationStatus === "blocked") {
@@ -627,23 +664,24 @@ export default function HomeScreen({ navigation }: Props) {
       >
         {userPos && (
           <Marker
+            key={`me-${overlayEpoch}`}
             coordinate={{ latitude: userPos.lat, longitude: userPos.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
             rotation={heading}
             flat
-            tracksViewChanges={false}
+            tracksViewChanges={!markersSettled}
           >
             <VehicleMarker vehicleStyle={vehicleStyle} />
           </Marker>
         )}
         {otherUsers.map((u) => (
           <Marker
-            key={u.deviceId}
+            key={`${u.deviceId}-${overlayEpoch}`}
             coordinate={{ latitude: u.lat, longitude: u.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
             rotation={u.heading ?? 0}
             flat={u.heading != null}
-            tracksViewChanges={false}
+            tracksViewChanges={!markersSettled}
             onPress={() => {
               setSelectedId(null);
               setRaceStep("closed");
@@ -666,7 +704,7 @@ export default function HomeScreen({ navigation }: Props) {
           const mid = pointAtDistance(s.points, cumDist, cumDist[cumDist.length - 1] / 2);
           const isSelected = s.id === selectedId;
           return (
-            <React.Fragment key={s.id}>
+            <React.Fragment key={`${s.id}-${overlayEpoch}`}>
               <Polyline
                 coordinates={s.points.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
                 strokeColor={isSelected ? colors.racePrimary : colors.cyan}

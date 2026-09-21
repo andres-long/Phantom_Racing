@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, AppState, Alert } from "react-native";
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, AppState, Alert, Linking } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import * as Location from "expo-location";
 import { useFocusEffect } from "@react-navigation/native";
@@ -76,8 +76,22 @@ function regionToBounds(region: Region): MapBounds {
 // (the "All tracks" button), since that's a secondary, occasional action.
 export default function HomeScreen({ navigation }: Props) {
   const { user, vehicleStyle, incognito, voiceEnabled, units } = useUser();
-  const { reportPosition, connectedPeers, talking, setTalking, micReady } = useProximityVoiceContext();
+  const { reportPosition, connectedPeers, talking, setTalking, micReady, micBlocked, retryMic } =
+    useProximityVoiceContext();
   const [blocking, setBlocking] = useState(false);
+
+  // Where the map opens. null until we've checked for a cached fix, so the
+  // map never mounts on the hardcoded fallback when we could have opened it
+  // on you instead (initialRegion is only read once, at mount).
+  const [initialRegion, setInitialRegion] = useState<Region | null>(null);
+  // Why you might not be on the map: permission not granted yet / denied /
+  // denied with "don't ask again" / phone's location services switched off.
+  // Drives the banner under the top bar that explains it and fixes it.
+  const [locationStatus, setLocationStatus] = useState<"checking" | "granted" | "denied" | "blocked" | "servicesOff">(
+    "checking"
+  );
+  // Bumped by the banner's button to re-run the location setup below.
+  const [locationRetry, setLocationRetry] = useState(0);
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
@@ -213,50 +227,92 @@ export default function HomeScreen({ navigation }: Props) {
       let cancelled = false;
       let autoStarted = false;
 
-      (async () => {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted" || cancelled) return;
-        subscriptionRef.current = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 5 },
-          (loc) => {
-            const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-            setUserPos(pos);
-            // heading is -1 (or null on some devices) when the compass
-            // reading isn't reliable yet, e.g. standing still -- keep
-            // pointing the last known direction instead of snapping to
-            // north.
-            const validHeading = loc.coords.heading != null && loc.coords.heading >= 0 ? loc.coords.heading : null;
-            if (validHeading != null) {
-              setHeading(validHeading);
-            }
-            latestPosRef.current = { coords: pos, heading: validHeading };
-            reportPosition(pos, validHeading);
-            const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
-            setSpeedKmh(currentSpeedKmh);
+      // `live` is false for the cached last-known fix we show immediately --
+      // its speed is stale, so it must not drive the speed HUD or trigger
+      // auto-start racing.
+      const applyLocation = (loc: Location.LocationObject, live: boolean) => {
+        const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+        setUserPos(pos);
+        // heading is -1 (or null on some devices) when the compass
+        // reading isn't reliable yet, e.g. standing still -- keep
+        // pointing the last known direction instead of snapping to
+        // north.
+        const validHeading = loc.coords.heading != null && loc.coords.heading >= 0 ? loc.coords.heading : null;
+        if (validHeading != null) {
+          setHeading(validHeading);
+        }
+        latestPosRef.current = { coords: pos, heading: validHeading };
+        reportPosition(pos, validHeading);
 
-            if (followRef.current) {
-              // Tighter than the old 0.02 so turns on small roads/blocks
-              // are easier to spot while driving.
-              mapRef.current?.animateToRegion(
-                { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
-                500
-              );
-            }
+        if (followRef.current) {
+          // Tighter than the old 0.02 so turns on small roads/blocks
+          // are easier to spot while driving.
+          mapRef.current?.animateToRegion(
+            { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
+            500
+          );
+        }
 
-            // Guarded to fire at most once per visit to this screen, so it
-            // can't re-trigger every second while sitting still right at a
-            // start line -- only an actual approach at driving speed counts.
-            if (!autoStarted && currentSpeedKmh >= AUTO_START_SPEED_KMH) {
-              const candidate = nearbyRef.current.find(
-                (s) => s.points.length >= 2 && haversine(pos, s.points[0]) <= AUTO_START_RADIUS_M
-              );
-              if (candidate) {
-                autoStarted = true;
-                navigation.navigate("RecordRun", { segmentId: candidate.id, autoStart: true });
-              }
-            }
+        if (!live) return;
+        const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
+        setSpeedKmh(currentSpeedKmh);
+
+        // Guarded to fire at most once per visit to this screen, so it
+        // can't re-trigger every second while sitting still right at a
+        // start line -- only an actual approach at driving speed counts.
+        if (!autoStarted && currentSpeedKmh >= AUTO_START_SPEED_KMH) {
+          const candidate = nearbyRef.current.find(
+            (s) => s.points.length >= 2 && haversine(pos, s.points[0]) <= AUTO_START_RADIUS_M
+          );
+          if (candidate) {
+            autoStarted = true;
+            navigation.navigate("RecordRun", { segmentId: candidate.id, autoStart: true });
           }
-        );
+        }
+      };
+
+      (async () => {
+        const perm = await Location.requestForegroundPermissionsAsync();
+        if (cancelled) return;
+        if (perm.status !== "granted") {
+          // Previously this just returned silently, leaving the map parked
+          // on the fallback with no hint why you weren't on it.
+          setLocationStatus(perm.canAskAgain ? "denied" : "blocked");
+          return;
+        }
+        try {
+          if (!(await Location.hasServicesEnabledAsync())) {
+            if (!cancelled) setLocationStatus("servicesOff");
+            return;
+          }
+        } catch {
+          // Can't tell -- carry on and let the watcher below find out.
+        }
+        if (cancelled) return;
+        setLocationStatus("granted");
+
+        // Put you on the map right away from the phone's cached fix, rather
+        // than waiting (sometimes a long while, indoors) for the first fresh
+        // GPS reading from the watcher below.
+        try {
+          const last = await Location.getLastKnownPositionAsync({});
+          if (last && !cancelled) applyLocation(last, false);
+        } catch {}
+        if (cancelled) return;
+
+        try {
+          const sub = await Location.watchPositionAsync(
+            { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 5 },
+            (loc) => applyLocation(loc, true)
+          );
+          if (cancelled) {
+            sub.remove();
+          } else {
+            subscriptionRef.current = sub;
+          }
+        } catch {
+          if (!cancelled) setLocationStatus("servicesOff");
+        }
       })();
 
       // Presence: one immediate tick so markers/your own visibility don't
@@ -277,8 +333,73 @@ export default function HomeScreen({ navigation }: Props) {
         subscriptionRef.current = null;
         clearInterval(presenceTimer);
       };
-    }, [loadSegments, navigation, sendHeartbeatTick, refreshPresence, refreshIncomingRaces, reportPosition])
+    }, [loadSegments, navigation, sendHeartbeatTick, refreshPresence, refreshIncomingRaces, reportPosition, locationRetry])
   );
+
+  // Pick where the map opens, before it mounts: the phone's cached position
+  // if we already have location permission, else the fallback (in which
+  // case the focus effect above asks for permission and moves the map to
+  // you as soon as it gets a fix). Only checks permission -- never prompts
+  // -- so it can't collide with the focus effect's own permission request.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let region = FALLBACK_REGION;
+      try {
+        const perm = await Location.getForegroundPermissionsAsync();
+        if (perm.status === "granted") {
+          const last = await Location.getLastKnownPositionAsync({});
+          if (last) {
+            region = {
+              latitude: last.coords.latitude,
+              longitude: last.coords.longitude,
+              latitudeDelta: 0.008,
+              longitudeDelta: 0.008,
+            };
+          }
+        }
+      } catch {}
+      if (cancelled) return;
+      regionRef.current = region;
+      setInitialRegion(region);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const fixLocation = async () => {
+    if (locationStatus === "blocked") {
+      Linking.openSettings();
+      return;
+    }
+    if (locationStatus === "servicesOff") {
+      try {
+        // Android shows its own "turn on location" dialog for this.
+        await Location.enableNetworkProviderAsync();
+      } catch {
+        // User said no, or not supported -- the retry below will just
+        // land back on the same banner.
+      }
+    }
+    setLocationStatus("checking");
+    setLocationRetry((n) => n + 1);
+  };
+
+  const onMicUnavailable = () => {
+    if (micBlocked) {
+      Alert.alert(
+        "Microphone is off",
+        "Phantom Racing isn't allowed to use your microphone. Turn it on in the app's settings to use push-to-talk.",
+        [
+          { text: "Not now", style: "cancel" },
+          { text: "Open settings", onPress: () => Linking.openSettings() },
+        ]
+      );
+      return;
+    }
+    retryMic();
+  };
 
   // Polls the race we just challenged someone to, waiting for them to
   // accept/decline (or for it to time out). Only runs while we have an
@@ -432,6 +553,30 @@ export default function HomeScreen({ navigation }: Props) {
     }
   };
 
+  if (!initialRegion) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator color={colors.cyan} size="large" />
+      </View>
+    );
+  }
+
+  // Everything pinned to the bottom sits above the phone's navigation bar
+  // (previously the GO TO / NEW SEGMENT buttons were drawn underneath it).
+  const bottomBase = insets.bottom + 16;
+  const hudBottom = bottomBase + 68;
+
+  const locationBannerText =
+    locationStatus === "denied"
+      ? "Location permission is off -- you're not on the map."
+      : locationStatus === "blocked"
+      ? "Location is blocked for this app -- you're not on the map."
+      : locationStatus === "servicesOff"
+      ? "Your phone's location (GPS) is turned off."
+      : null;
+  const locationBannerAction =
+    locationStatus === "blocked" ? "OPEN SETTINGS" : locationStatus === "servicesOff" ? "TURN ON" : "ALLOW";
+
   return (
     <View style={styles.container}>
       <MapView
@@ -439,7 +584,19 @@ export default function HomeScreen({ navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        initialRegion={FALLBACK_REGION}
+        initialRegion={initialRegion}
+        onMapReady={() => {
+          // If a fix already arrived before the map existed (e.g. while the
+          // permission prompt was up on first launch), jump to it now --
+          // the watcher only fires again after you move ~5m.
+          const pos = latestPosRef.current;
+          if (pos && followRef.current) {
+            mapRef.current?.animateToRegion(
+              { latitude: pos.coords.lat, longitude: pos.coords.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
+              300
+            );
+          }
+        }}
         onPress={() => {
           setSelectedId(null);
           setSelectedUser(null);
@@ -528,34 +685,52 @@ export default function HomeScreen({ navigation }: Props) {
         })}
       </MapView>
 
+      {/* Two rows: your name gets the full width on its own row (it used to
+          share one row with three buttons and got cut down to "Fl..."). */}
       <View style={[styles.topBar, { top: insets.top + 10 }]}>
-        <Pressable onPress={() => navigation.navigate("Username")} hitSlop={8} style={styles.topBarLeft}>
+        <Pressable onPress={() => navigation.navigate("Username")} hitSlop={8} style={styles.accountPill}>
+          <Text style={styles.accountLabel}>RACER</Text>
           <Text style={styles.topBarName} numberOfLines={1}>
-            {user ? `${user.displayName} >` : "Connecting..."}
+            {user ? user.displayName : "Connecting..."}
           </Text>
+          <Text style={styles.accountChevron}>{">"}</Text>
         </Pressable>
-        <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("AllSegments")}>
-          <Text style={styles.topBarButtonText}>ALL TRACKS</Text>
-        </Pressable>
-        <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("Stats")}>
-          <Text style={styles.topBarButtonText}>STATS</Text>
-        </Pressable>
-        <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("Welcome")}>
-          <Text style={styles.topBarButtonText}>HOW IT WORKS</Text>
-        </Pressable>
+        <View style={styles.topBarRow}>
+          <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("AllSegments")}>
+            <Text style={styles.topBarButtonText} numberOfLines={1}>
+              ALL TRACKS
+            </Text>
+          </Pressable>
+          <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("Stats")}>
+            <Text style={styles.topBarButtonText} numberOfLines={1}>
+              STATS
+            </Text>
+          </Pressable>
+          <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("Welcome")}>
+            <Text style={styles.topBarButtonText} numberOfLines={1}>
+              HOW IT WORKS
+            </Text>
+          </Pressable>
+        </View>
+
+        {locationBannerText && (
+          <Pressable style={styles.locationBanner} onPress={fixLocation}>
+            <Text style={styles.locationBannerText}>{locationBannerText}</Text>
+            <Text style={styles.locationBannerAction}>{locationBannerAction}</Text>
+          </Pressable>
+        )}
+        {error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
       </View>
 
-      {error && (
-        <View style={[styles.errorBox, { top: insets.top + 56 }]}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      )}
-
-      <Pressable style={styles.recenterButton} onPress={recenter}>
+      <Pressable style={[styles.recenterButton, { bottom: hudBottom + 58 }]} onPress={recenter}>
         <Text style={styles.recenterIcon}>o</Text>
       </Pressable>
 
-      <View style={styles.speedHud}>
+      <View style={[styles.speedHud, { bottom: hudBottom }]}>
         {loading ? (
           <ActivityIndicator color={colors.cyan} />
         ) : (
@@ -581,21 +756,28 @@ export default function HomeScreen({ navigation }: Props) {
         )}
       </View>
 
-      {voiceEnabled && (
-        <Pressable
-          style={[styles.talkButton, talking && styles.talkButtonActive, !micReady && styles.talkButtonDisabled]}
-          disabled={!micReady}
-          onPressIn={() => setTalking(true)}
-          onPressOut={() => setTalking(false)}
-        >
-          <Text style={[styles.talkButtonText, talking && styles.talkButtonTextActive]}>
-            {!micReady ? "MIC UNAVAILABLE" : talking ? "TALKING..." : "HOLD TO TALK"}
-          </Text>
-        </Pressable>
-      )}
+      {/* Right-hand side, so it no longer sits on top of the speed HUD. When
+          the mic isn't available it's a tap-to-fix button instead of a dead
+          one: re-asks for permission, or points to settings if blocked. */}
+      {voiceEnabled &&
+        (micReady ? (
+          <Pressable
+            style={[styles.talkButton, { bottom: hudBottom }, talking && styles.talkButtonActive]}
+            onPressIn={() => setTalking(true)}
+            onPressOut={() => setTalking(false)}
+          >
+            <Text style={[styles.talkButtonText, talking && styles.talkButtonTextActive]}>
+              {talking ? "TALKING..." : "HOLD TO TALK"}
+            </Text>
+          </Pressable>
+        ) : (
+          <Pressable style={[styles.talkButton, styles.talkButtonDisabled, { bottom: hudBottom }]} onPress={onMicUnavailable}>
+            <Text style={styles.talkButtonText}>TAP TO ENABLE MIC</Text>
+          </Pressable>
+        ))}
 
       {selected && (
-        <View style={styles.card}>
+        <View style={[styles.card, { bottom: hudBottom }]}>
           <Pressable style={styles.cardClose} onPress={() => setSelectedId(null)} hitSlop={8}>
             <Text style={styles.cardCloseText}>x</Text>
           </Pressable>
@@ -625,7 +807,7 @@ export default function HomeScreen({ navigation }: Props) {
       )}
 
       {selectedUser && (
-        <View style={styles.card}>
+        <View style={[styles.card, { bottom: hudBottom }]}>
           <Pressable
             style={styles.cardClose}
             onPress={() => {
@@ -696,7 +878,7 @@ export default function HomeScreen({ navigation }: Props) {
       )}
 
       {incomingRace && (
-        <View style={[styles.incomingCard, { top: insets.top + 56 }]}>
+        <View style={[styles.incomingCard, { top: insets.top + 104 }]}>
           <Text style={styles.cardTitle}>Race request!</Text>
           <Text style={styles.cardMeta}>
             {incomingRace.opponentDisplayName} wants to race you -- {incomingRace.distanceLabel}
@@ -723,40 +905,59 @@ export default function HomeScreen({ navigation }: Props) {
         label="+ NEW SEGMENT"
         variant="outline"
         onPress={() => navigation.navigate("CreateSegment")}
-        style={styles.fab}
+        style={[styles.fab, { bottom: bottomBase }]}
       />
-      <NeonButton label="GO TO..." onPress={() => navigation.navigate("GoTo")} style={styles.fabRight} />
+      <NeonButton
+        label="GO TO..."
+        onPress={() => navigation.navigate("GoTo")}
+        style={[styles.fabRight, { bottom: bottomBase }]}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
+  centered: { alignItems: "center", justifyContent: "center" },
   topBar: {
     position: "absolute",
     left: 16,
     right: 16,
-    flexDirection: "row",
-    alignItems: "center",
     gap: 8,
   },
-  topBarLeft: {
+  accountPill: {
+    ...panelStyle,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    gap: 10,
+  },
+  accountLabel: { color: colors.textMuted, fontSize: 10, fontWeight: "700", letterSpacing: 1 },
+  topBarName: { flex: 1, color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 13 },
+  accountChevron: { color: colors.cyan, fontSize: 14, fontWeight: "800" },
+  topBarRow: { flexDirection: "row", gap: 8 },
+  topBarButton: {
     flex: 1,
     ...panelStyle,
     paddingVertical: 8,
-    paddingHorizontal: 12,
-  },
-  topBarName: { color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 12 },
-  topBarButton: {
-    ...panelStyle,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 6,
+    alignItems: "center",
   },
   topBarButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "700", letterSpacing: 0.5 },
+  locationBanner: {
+    backgroundColor: "#2a1a0aee",
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.racePrimary,
+    padding: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  locationBannerText: { flex: 1, color: colors.textPrimary, fontSize: 12, fontWeight: "600" },
+  locationBannerAction: { color: colors.racePrimary, fontSize: 12, fontWeight: "800", letterSpacing: 0.5 },
   errorBox: {
-    position: "absolute",
-    left: 16,
-    right: 16,
     backgroundColor: "#2a1414ee",
     borderRadius: 4,
     padding: 10,
@@ -801,6 +1002,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     alignItems: "center",
     minWidth: 110,
+    maxWidth: 170,
   },
   speedValue: { color: colors.cyan, fontFamily: fonts.display, fontSize: 32, lineHeight: 38 },
   speedUnit: { color: colors.textSecondary, fontSize: 11, marginBottom: 4, letterSpacing: 1 },
@@ -809,9 +1011,7 @@ const styles = StyleSheet.create({
   voiceCount: { color: colors.cyan, fontSize: 11, marginTop: 2, textAlign: "center", fontWeight: "700", maxWidth: 140 },
   talkButton: {
     position: "absolute",
-    bottom: 96,
-    left: "50%",
-    marginLeft: -74,
+    right: 16,
     width: 148,
     height: 46,
     borderRadius: 23,
@@ -822,7 +1022,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   talkButtonActive: { backgroundColor: colors.racePrimary, borderColor: colors.racePrimary },
-  talkButtonDisabled: { opacity: 0.4 },
+  talkButtonDisabled: { opacity: 0.7, borderStyle: "dashed" },
   talkButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "800", letterSpacing: 0.5 },
   talkButtonTextActive: { color: colors.bg },
   otherUserWrap: { alignItems: "center" },

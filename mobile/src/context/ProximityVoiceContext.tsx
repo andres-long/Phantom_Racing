@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef } from "react";
+import React, { createContext, useCallback, useContext, useRef, useState } from "react";
 import { useProximityVoice } from "../hooks/useProximityVoice";
 import { LatLng, VoicePeer } from "../types";
 
@@ -7,6 +7,11 @@ type ProximityVoiceContextValue = {
   talking: boolean;
   setTalking: (value: boolean) => void;
   micReady: boolean;
+  // True once the user picked "don't ask again" for the mic -- only the
+  // system settings screen can re-enable it from there.
+  micBlocked: boolean;
+  // Re-asks for the mic on demand (e.g. tapping "enable mic" after a denial).
+  retryMic: () => void;
   // Screens that already track GPS (Home, a live race) call this as they
   // get fixes, the same way they already feed usePresenceHeartbeat's
   // position ref. Proximity voice doesn't own a location subscription of
@@ -29,13 +34,34 @@ const ProximityVoiceContext = createContext<ProximityVoiceContextValue | null>(n
 // useProximityVoiceContext below.
 export function ProximityVoiceProvider({ children }: { children: React.ReactNode }) {
   const posRef = useRef<{ coords: LatLng; heading: number | null } | null>(null);
-  const { connectedPeers, talking, setTalking, micReady } = useProximityVoice(posRef);
+  // Flips true on the first reported fix and stays true. It's what lets the
+  // voice engine wait until location permission has been answered before it
+  // asks for the mic (see useProximityVoice for why the two can't overlap).
+  const [positionReady, setPositionReady] = useState(false);
+  const positionReadyRef = useRef(false);
+
+  const { connectedPeers, talking, setTalking, micReady, micBlocked, retryMic } = useProximityVoice(
+    posRef,
+    positionReady
+  );
 
   const reportPosition = useCallback((coords: LatLng, heading: number | null) => {
     posRef.current = { coords, heading };
+    if (!positionReadyRef.current) {
+      positionReadyRef.current = true;
+      setPositionReady(true);
+    }
   }, []);
 
-  const value: ProximityVoiceContextValue = { connectedPeers, talking, setTalking, micReady, reportPosition };
+  const value: ProximityVoiceContextValue = {
+    connectedPeers,
+    talking,
+    setTalking,
+    micReady,
+    micBlocked,
+    retryMic,
+    reportPosition,
+  };
 
   return <ProximityVoiceContext.Provider value={value}>{children}</ProximityVoiceContext.Provider>;
 }

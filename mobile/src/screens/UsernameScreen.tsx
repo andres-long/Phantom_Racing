@@ -12,6 +12,7 @@ import {
   ScrollView,
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RootStackParamList, BlockedPlayer } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
@@ -149,6 +150,7 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
     units,
     setUnits,
   } = useUser();
+  const insets = useSafeAreaInsets();
   const [name, setName] = useState(user?.displayName ?? "");
   const [saving, setSaving] = useState(false);
   const [blockedPlayers, setBlockedPlayers] = useState<BlockedPlayer[]>([]);
@@ -212,7 +214,17 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <GridBackground />
-      <ScrollView contentContainerStyle={styles.content}>
+      {/* Its own content style, not styles.content: that one's flex:1 +
+          justifyContent:center pinned the content to exactly one screen of
+          height (so it couldn't scroll) and centered the overflow, pushing
+          the name field up under the header where it got cut off. */}
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.signedInLabel}>SIGNED IN AS</Text>
+        <Text style={styles.currentName}>{user?.displayName}</Text>
+
         <Text style={styles.title}>CHANGE YOUR NAME</Text>
         <Text style={styles.subtitle}>
           This is what shows up on leaderboards and ghost races, for the multiplayer experience
@@ -341,6 +353,15 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   content: { flex: 1, padding: 20, justifyContent: "center" },
+  scrollContent: { flexGrow: 1, padding: 20, paddingTop: 24 },
+  signedInLabel: { color: colors.textMuted, fontSize: 11, fontWeight: "700", letterSpacing: 1.5 },
+  currentName: {
+    color: colors.cyan,
+    fontFamily: fonts.display,
+    fontSize: 24,
+    marginTop: 4,
+    marginBottom: 28,
+  },
   title: { color: colors.textPrimary, fontFamily: fonts.display, fontSize: 22, letterSpacing: 1.5, marginBottom: 12 },
   subtitle: { color: colors.textSecondary, fontSize: 14, lineHeight: 20, marginBottom: 24 },
   input: {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, PermissionsAndroid, Platform } from "react-native";
 import {
   MediaStream,
   RTCIceCandidate,
@@ -59,12 +59,27 @@ type PeerEntry = {
 // mic streams and two pollers racing to steal each other's signals. Mount
 // it exactly once app-wide (see ProximityVoiceContext, which every screen
 // actually consumes) rather than calling this hook directly from a screen.
-export function useProximityVoice(posRef: PresencePositionRef) {
+//
+// `positionReady` gates the mic request: Android can only show one
+// permission dialog at a time, and a second request made while the first is
+// still open comes back silently denied. Home asks for location as soon as
+// it opens, so asking for the mic at the same instant (app launch) meant one
+// or both prompts got auto-denied -- no position on the map, "MIC
+// UNAVAILABLE". Waiting for the first GPS fix means location permission has
+// already been answered before we ever ask for the mic.
+export function useProximityVoice(posRef: PresencePositionRef, positionReady: boolean) {
   const { user, voiceEnabled } = useUser();
 
   const [connectedPeers, setConnectedPeers] = useState<VoicePeer[]>([]);
   const [talking, setTalkingState] = useState(false);
   const [micReady, setMicReady] = useState(false);
+  // "Don't ask again" was chosen -- only the system settings screen can
+  // turn the mic back on, so the UI should send the user there instead of
+  // re-prompting (Android wouldn't show a prompt anyway).
+  const [micBlocked, setMicBlocked] = useState(false);
+  // Bumped by retryMic() to re-run the mic effect below on demand (e.g. the
+  // user tapped "enable mic" after denying it once).
+  const [micAttempt, setMicAttempt] = useState(0);
 
   const userRef = useRef(user);
   const talkingRef = useRef(false);
@@ -249,8 +264,21 @@ export function useProximityVoice(posRef: PresencePositionRef) {
       return;
     }
     if (localStreamRef.current) return;
+    // Wait for location to be sorted out first (see positionReady above),
+    // unless the user explicitly asked for the mic via retryMic().
+    if (!positionReady && micAttempt === 0) return;
     (async () => {
       try {
+        if (Platform.OS === "android") {
+          const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+          if (cancelled) return;
+          if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+            setMicBlocked(result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN);
+            setMicReady(false);
+            return;
+          }
+          setMicBlocked(false);
+        }
         const stream = (await mediaDevices.getUserMedia({ audio: true, video: false })) as unknown as MediaStream;
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
@@ -271,7 +299,11 @@ export function useProximityVoice(posRef: PresencePositionRef) {
     return () => {
       cancelled = true;
     };
-  }, [voiceEnabled, user]);
+  }, [voiceEnabled, user, positionReady, micAttempt]);
+
+  const retryMic = useCallback(() => {
+    setMicAttempt((n) => n + 1);
+  }, []);
 
   // Nearby-peer discovery: opens a connection to every newly-in-range
   // unblocked device, closes the ones that dropped out (out of range, went
@@ -393,5 +425,5 @@ export function useProximityVoice(posRef: PresencePositionRef) {
     }
   }, []);
 
-  return { connectedPeers, talking, setTalking, micReady };
+  return { connectedPeers, talking, setTalking, micReady, micBlocked, retryMic };
 }

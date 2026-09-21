@@ -77,7 +77,7 @@ function AuthForm() {
         <Text style={styles.title}>{mode === "signup" ? "CREATE YOUR RACER" : "WELCOME BACK"}</Text>
         <Text style={styles.subtitle}>
           {mode === "signup"
-            ? "Your name and leaderboard history are tied to this account -- log back in with it on any phone, no need to start over."
+            ? "Your name and leaderboard history are tied to this account."
             : "Log in with your racer name and password to pick up your leaderboard history here."}
         </Text>
         <TextInput

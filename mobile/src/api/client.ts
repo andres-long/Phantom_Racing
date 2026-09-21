@@ -28,16 +28,51 @@ import {
 // first request after a quiet period can take ~30-60s to wake it back up.
 export const API_BASE_URL = "https://phantom-racing.onrender.com";
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-  });
-  const data = await res.json().catch(() => null);
-  if (!res.ok) {
-    throw new Error((data && data.error) || `Request failed (${res.status})`);
+// Every request has a time limit. React Native's Android networking
+// (OkHttp) has NO timeout by default and allows only 5 connections to one
+// host at a time -- so a handful of requests that hang (a flaky cellular
+// connection, or the server waking up from sleep) used to fill every slot
+// forever, and everything after them (the track list, a route) queued behind
+// them indefinitely: endless spinners. Aborting frees the slot.
+//
+// User-initiated loads get long enough to ride out a Render cold start
+// (~30-60s). Background polls (heartbeat, presence, race/voice polling) get
+// a short one: they repeat every few seconds anyway, so a slow one should
+// just be dropped, not left holding a connection.
+const DEFAULT_TIMEOUT_MS = 60000;
+const POLL_TIMEOUT_MS = 8000;
+
+async function request<T>(path: string, options: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      signal: controller.signal,
+    });
+  } catch {
+    clearTimeout(timer);
+    if (controller.signal.aborted) {
+      throw new Error("The server took too long to answer -- it may be waking up. Try again in a moment.");
+    }
+    throw new Error("Couldn't reach the server -- check your connection and try again.");
   }
-  return data as T;
+  try {
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error((data && data.error) || `Request failed (${res.status})`);
+    }
+    return data as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// For background calls that repeat on a timer -- see POLL_TIMEOUT_MS.
+function poll<T>(path: string, options: RequestInit = {}): Promise<T> {
+  return request<T>(path, options, POLL_TIMEOUT_MS);
 }
 
 export const api = {
@@ -167,13 +202,13 @@ export const api = {
     incognito: boolean,
     voiceEnabled: boolean
   ) =>
-    request<{ ok: true }>("/api/presence", {
+    poll<{ ok: true }>("/api/presence", {
       method: "POST",
       body: JSON.stringify({ deviceId, lat: position.lat, lng: position.lng, heading, incognito, voiceEnabled }),
     }),
 
   queryPresence: (deviceId: string, bounds: MapBounds) =>
-    request<{ users: PresenceUser[] }>(
+    poll<{ users: PresenceUser[] }>(
       `/api/presence?deviceId=${encodeURIComponent(deviceId)}&north=${bounds.north}&south=${bounds.south}&east=${bounds.east}&west=${bounds.west}`
     ),
 
@@ -187,10 +222,10 @@ export const api = {
     }),
 
   getIncomingRaceChallenges: (deviceId: string) =>
-    request<RaceChallenge[]>(`/api/races/incoming?deviceId=${encodeURIComponent(deviceId)}`),
+    poll<RaceChallenge[]>(`/api/races/incoming?deviceId=${encodeURIComponent(deviceId)}`),
 
   getRaceChallenge: (raceId: string, deviceId: string) =>
-    request<RaceChallenge>(`/api/races/${raceId}?deviceId=${encodeURIComponent(deviceId)}`),
+    poll<RaceChallenge>(`/api/races/${raceId}?deviceId=${encodeURIComponent(deviceId)}`),
 
   respondToRaceChallenge: (raceId: string, deviceId: string, accept: boolean) =>
     request<RaceChallenge>(`/api/races/${raceId}/respond`, {
@@ -199,7 +234,7 @@ export const api = {
     }),
 
   postRaceProgress: (raceId: string, deviceId: string, distanceM: number, elapsedMs: number, speedKmh: number) =>
-    request<RaceChallenge>(`/api/races/${raceId}/progress`, {
+    poll<RaceChallenge>(`/api/races/${raceId}/progress`, {
       method: "POST",
       body: JSON.stringify({ deviceId, distanceM, elapsedMs, speedKmh }),
     }),
@@ -229,12 +264,12 @@ export const api = {
   // just a mailbox for the SDP offers/answers/ICE candidates the two
   // devices negotiate directly with each other.
   nearbyVoicePeers: (deviceId: string, position: LatLng) =>
-    request<{ peers: VoicePeer[] }>(
+    poll<{ peers: VoicePeer[] }>(
       `/api/voice/nearby?deviceId=${encodeURIComponent(deviceId)}&lat=${position.lat}&lng=${position.lng}`
     ),
 
   sendVoiceSignal: (fromDeviceId: string, toDeviceId: string, kind: VoiceSignalKind, data: any) =>
-    request<{ ok: true }>("/api/voice/signal", {
+    poll<{ ok: true }>("/api/voice/signal", {
       method: "POST",
       body: JSON.stringify({ fromDeviceId, toDeviceId, kind, data }),
     }),
@@ -244,7 +279,7 @@ export const api = {
   // signaling better than the "always returns the full list" pattern used
   // elsewhere (races, presence).
   pollVoiceSignals: (deviceId: string) =>
-    request<{ signals: VoiceSignal[] }>(`/api/voice/signal?deviceId=${encodeURIComponent(deviceId)}`),
+    poll<{ signals: VoiceSignal[] }>(`/api/voice/signal?deviceId=${encodeURIComponent(deviceId)}`),
 
   blockPlayer: (deviceId: string, blockedDeviceId: string) =>
     request<{ ok: true }>("/api/voice/block", {

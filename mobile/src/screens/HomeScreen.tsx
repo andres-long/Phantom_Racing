@@ -143,6 +143,8 @@ export default function HomeScreen({ navigation }: Props) {
   const userRef = useRef(user);
   const regionRef = useRef<Region>(FALLBACK_REGION);
   const presenceInFlightRef = useRef(false);
+  const heartbeatInFlightRef = useRef(false);
+  const racesInFlightRef = useRef(false);
 
   useEffect(() => {
     incognitoRef.current = incognito;
@@ -163,10 +165,16 @@ export default function HomeScreen({ navigation }: Props) {
   const sendHeartbeatTick = useCallback(() => {
     const deviceId = userRef.current?.deviceId;
     const pos = latestPosRef.current;
-    if (!deviceId || !pos || AppState.currentState !== "active") return;
+    // Skip if the last one hasn't come back yet, so slow ones can't stack
+    // up and hog the phone's limited connections to the server.
+    if (!deviceId || !pos || heartbeatInFlightRef.current || AppState.currentState !== "active") return;
+    heartbeatInFlightRef.current = true;
     api
       .sendHeartbeat(deviceId, pos.coords, pos.heading, incognitoRef.current, voiceEnabledRef.current)
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        heartbeatInFlightRef.current = false;
+      });
   }, []);
 
   // Refreshes who else is visible in the current map region. Independent of
@@ -194,12 +202,15 @@ export default function HomeScreen({ navigation }: Props) {
   // resolve it, instead of yanking the card out from under them.
   const refreshIncomingRaces = useCallback(async () => {
     const deviceId = userRef.current?.deviceId;
-    if (!deviceId) return;
+    if (!deviceId || racesInFlightRef.current) return;
+    racesInFlightRef.current = true;
     try {
       const incoming = await api.getIncomingRaceChallenges(deviceId);
       setIncomingRace((current) => (current ? current : incoming.length > 0 ? incoming[0] : null));
     } catch {
       // Best-effort, same as presence -- next tick retries.
+    } finally {
+      racesInFlightRef.current = false;
     }
   }, []);
 
@@ -720,9 +731,16 @@ export default function HomeScreen({ navigation }: Props) {
           </Pressable>
         )}
         {error && (
-          <View style={styles.errorBox}>
+          <Pressable
+            style={styles.errorBox}
+            onPress={() => {
+              setLoading(true);
+              loadSegments();
+            }}
+          >
             <Text style={styles.errorText}>{error}</Text>
-          </View>
+            <Text style={styles.errorRetry}>TAP TO RETRY</Text>
+          </Pressable>
         )}
       </View>
 
@@ -965,6 +983,7 @@ const styles = StyleSheet.create({
     borderColor: colors.danger,
   },
   errorText: { color: colors.danger, fontSize: 12, fontWeight: "600" },
+  errorRetry: { color: colors.textPrimary, fontSize: 11, fontWeight: "800", letterSpacing: 0.5, marginTop: 6 },
   trackLabel: {
     backgroundColor: "#000000dd",
     borderRadius: 4,

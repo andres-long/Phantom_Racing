@@ -37,17 +37,25 @@ export function usePresenceHeartbeat(posRef: PresencePositionRef) {
     voiceEnabledRef.current = voiceEnabled;
   }, [voiceEnabled]);
 
+  // Skip a tick while the previous heartbeat is still in flight, so slow
+  // ones can't stack up and hog the phone's limited server connections.
+  const inFlightRef = useRef(false);
+
   useEffect(() => {
     const tick = () => {
       const deviceId = userRef.current?.deviceId;
       const pos = posRef.current;
-      if (!deviceId || !pos || AppState.currentState !== "active") return;
+      if (!deviceId || !pos || inFlightRef.current || AppState.currentState !== "active") return;
+      inFlightRef.current = true;
       api
         .sendHeartbeat(deviceId, pos.coords, pos.heading, incognitoRef.current, voiceEnabledRef.current)
         .catch(() => {
           // Best-effort, same as Home's -- a dropped heartbeat just means
           // this one tick didn't update your position, not something worth
           // interrupting a race/recording/drive over.
+        })
+        .finally(() => {
+          inFlightRef.current = false;
         });
     };
     tick();

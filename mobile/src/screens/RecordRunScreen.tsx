@@ -26,6 +26,7 @@ import {
   startBackgroundTracking,
   stopBackgroundTracking,
 } from "../backgroundLocation";
+import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
 type TracePoint = LatLng & { t: number };
@@ -56,15 +57,23 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const finishedRef = useRef(false);
   const maxSpeedRef = useRef(0);
   const autoStartTriggeredRef = useRef(false);
+  // Keeps this device visible on other users' maps while racing -- see
+  // usePresenceHeartbeat. Updated inline in handleLocationPoints below
+  // rather than via a separate effect, so it stays current without adding
+  // another render/effect on every GPS point.
+  const presencePosRef: PresencePositionRef = useRef(null);
+  usePresenceHeartbeat(presencePosRef);
 
   useEffect(() => {
     (async () => {
       try {
-        const seg = await api.getSegment(segmentId);
+        // deviceId included so a private track's own creator can still race
+        // it -- see canAccessSegment on the backend.
+        const seg = await api.getSegment(segmentId, user?.deviceId);
         setSegment(seg);
         cumDistRef.current = cumulativeDistances(seg.points);
         try {
-          const g = await api.getGhost(segmentId);
+          const g = await api.getGhost(segmentId, undefined, user?.deviceId);
           setGhost(g);
         } catch {
           // No runs yet on this segment -- fine, you'll just be setting the
@@ -141,6 +150,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
 
     setMyPos({ lat: last.lat, lng: last.lng });
     if (last.heading != null) setHeading(last.heading);
+    presencePosRef.current = { coords: { lat: last.lat, lng: last.lng }, heading: last.heading ?? null };
     mapRef.current?.animateToRegion(
       { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
       500

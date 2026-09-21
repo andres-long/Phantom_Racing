@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, TextInput, Alert } from "react-native";
+import { View, Text, StyleSheet, TextInput, Alert, Switch } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -19,6 +19,7 @@ import {
   startBackgroundTracking,
   stopBackgroundTracking,
 } from "../backgroundLocation";
+import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
 type TracePoint = LatLng & { t: number };
@@ -38,9 +39,14 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   const [speedKmh, setSpeedKmh] = useState(0);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
+  const [isPrivate, setIsPrivate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const maxSpeedRef = useRef(0);
   const mapRef = useRef<MapView | null>(null);
+  // Keeps this device visible on other users' maps while recording -- see
+  // usePresenceHeartbeat.
+  const presencePosRef: PresencePositionRef = useRef(null);
+  usePresenceHeartbeat(presencePosRef);
 
   useEffect(() => {
     (async () => {
@@ -78,6 +84,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
     const last = points[points.length - 1];
     setMyPos({ lat: last.lat, lng: last.lng });
     if (last.heading != null) setHeading(last.heading);
+    presencePosRef.current = { coords: { lat: last.lat, lng: last.lng }, heading: last.heading ?? null };
     setSpeedKmh(last.speedKmh);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
@@ -128,7 +135,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
     }
     setSubmitting(true);
     try {
-      const segment = await api.createSegment(name.trim(), trace, user.deviceId, maxSpeedRef.current);
+      const segment = await api.createSegment(name.trim(), trace, user.deviceId, maxSpeedRef.current, isPrivate);
       if (segment.run) {
         navigation.replace("RunSummary", {
           result: segment.run,
@@ -214,6 +221,23 @@ export default function CreateSegmentScreen({ navigation }: Props) {
             onChangeText={setName}
             autoFocus
           />
+          <View style={styles.privateRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.privateLabel}>Private track</Text>
+              <Text style={styles.privateHint}>
+                {isPrivate
+                  ? "Only you can see or race this -- you can make it public later."
+                  : "Anyone can see and race this track."}
+              </Text>
+            </View>
+            <Switch
+              value={isPrivate}
+              onValueChange={setIsPrivate}
+              trackColor={{ false: colors.panelBorder, true: colors.racePrimaryDim }}
+              thumbColor={isPrivate ? colors.racePrimary : colors.textMuted}
+              ios_backgroundColor={colors.panelBorder}
+            />
+          </View>
           <NeonButton
             label={submitting ? "SAVING..." : "SAVE SEGMENT"}
             onPress={submit}
@@ -247,4 +271,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.panelBorder,
   },
+  privateRow: {
+    ...panelStyle,
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    marginBottom: 10,
+  },
+  privateLabel: { color: colors.textPrimary, fontSize: 14, fontWeight: "700" },
+  privateHint: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
 });

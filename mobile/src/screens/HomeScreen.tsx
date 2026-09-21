@@ -143,7 +143,9 @@ export default function HomeScreen({ navigation }: Props) {
   const loadSegments = useCallback(async () => {
     try {
       setError(null);
-      const data = await api.listSegments();
+      // deviceId included so your own private tracks show up here too --
+      // see the "private tracks" feature.
+      const data = await api.listSegments(userRef.current?.deviceId);
       setSegments(data);
     } catch (e: any) {
       setError(e.message || "Couldn't reach the backend.");
@@ -347,6 +349,9 @@ export default function HomeScreen({ navigation }: Props) {
         </Pressable>
         <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("AllSegments")}>
           <Text style={styles.topBarButtonText}>ALL TRACKS</Text>
+        </Pressable>
+        <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("Stats")}>
+          <Text style={styles.topBarButtonText}>STATS</Text>
         </Pressable>
         <Pressable style={styles.topBarButton} onPress={() => navigation.navigate("Welcome")}>
           <Text style={styles.topBarButtonText}>HOW IT WORKS</Text>

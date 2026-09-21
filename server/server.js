@@ -208,7 +208,22 @@ function segmentSummary(dbState, segment) {
     runCount: runs.length,
     bestTimeMs: best ? best.durationMs : null,
     bestTimeUser: best ? dbState.users.find((u) => u.id === best.userId)?.displayName ?? "Unknown" : null,
+    creatorId: segment.creatorId,
+    isPrivate: !!segment.isPrivate,
   };
+}
+
+// A private segment is visible/raceable only by whoever created it -- every
+// route that reads or lists a specific segment checks this before returning
+// anything, so a private track's existence isn't even leaked to anyone else
+// (a stranger hitting its id directly gets the same "Segment not found" as a
+// made-up id, not a 403 that would confirm it exists). `deviceId` is
+// whoever's asking, looked up fresh each time (not trusted from the client)
+// so this can't be spoofed by just sending someone else's id.
+function canAccessSegment(dbState, segment, deviceId) {
+  if (!segment.isPrivate) return true;
+  const caller = deviceId ? findUserByDevice(dbState, deviceId) : null;
+  return !!caller && segment.creatorId === caller.id;
 }
 
 const routes = [];
@@ -328,13 +343,19 @@ route("PATCH", "/api/users/:deviceId", async ({ res, params, body }) => {
   sendJson(res, 200, publicUser(user));
 });
 
-// List all segments with a leaderboard summary.
-route("GET", "/api/segments", async ({ res }) => {
+// List all segments with a leaderboard summary. `deviceId` is optional (an
+// anonymous/unauthenticated caller just sees public segments) -- when
+// present, it also gets back their own private segments alongside every
+// public one, same as before this existed.
+route("GET", "/api/segments", async ({ res, query }) => {
   const state = await db.load();
+  const deviceId = (query.get("deviceId") || "").trim();
+  const caller = deviceId ? findUserByDevice(state, deviceId) : null;
+  const visible = state.segments.filter((s) => !s.isPrivate || (caller && s.creatorId === caller.id));
   sendJson(
     res,
     200,
-    state.segments.map((s) => segmentSummary(state, s))
+    visible.map((s) => segmentSummary(state, s))
   );
 });
 
@@ -343,7 +364,7 @@ route("GET", "/api/segments", async ({ res }) => {
 // first timed run (see tryCreateRun) -- the response carries both the
 // segment and (if the trace was a valid, plausible run) that first run.
 route("POST", "/api/segments", async ({ res, body }) => {
-  const { name, trace, deviceId, maxSpeedKmh } = body;
+  const { name, trace, deviceId, maxSpeedKmh, isPrivate } = body;
   if (!name || !Array.isArray(trace) || trace.length < 2) {
     return sendJson(res, 400, {
       error: "name and a trace of at least 2 {lat,lng,t} points are required",
@@ -366,6 +387,7 @@ route("POST", "/api/segments", async ({ res, body }) => {
     points: cleanPoints,
     lengthM: Math.round(geo.polylineLength(cleanPoints)),
     creatorId: creator.id,
+    isPrivate: !!isPrivate,
     createdAt: new Date().toISOString(),
   };
   state.segments.push(segment);
@@ -376,17 +398,39 @@ route("POST", "/api/segments", async ({ res, body }) => {
   sendJson(res, 201, { ...segmentSummary(state, segment), run, runError: run ? null : runError });
 });
 
-route("GET", "/api/segments/:id", async ({ res, params }) => {
+// Flip a segment you created between private and public -- the "start
+// private, make it public later if you change your mind" half of private
+// tracks. Ownership-checked: only the creator's device can do this.
+route("PATCH", "/api/segments/:id", async ({ res, params, body }) => {
+  const deviceId = (body.deviceId || "").trim();
   const state = await db.load();
   const segment = state.segments.find((s) => s.id === params.id);
   if (!segment) return sendJson(res, 404, { error: "Segment not found" });
+
+  const caller = deviceId ? findUserByDevice(state, deviceId) : null;
+  if (!caller || segment.creatorId !== caller.id) {
+    return sendJson(res, 403, { error: "Only the creator can change this track's privacy." });
+  }
+  segment.isPrivate = !!body.isPrivate;
+  await db.save(state);
   sendJson(res, 200, segmentSummary(state, segment));
 });
 
-route("GET", "/api/segments/:id/leaderboard", async ({ res, params }) => {
+route("GET", "/api/segments/:id", async ({ res, params, query }) => {
   const state = await db.load();
   const segment = state.segments.find((s) => s.id === params.id);
-  if (!segment) return sendJson(res, 404, { error: "Segment not found" });
+  if (!segment || !canAccessSegment(state, segment, query.get("deviceId"))) {
+    return sendJson(res, 404, { error: "Segment not found" });
+  }
+  sendJson(res, 200, segmentSummary(state, segment));
+});
+
+route("GET", "/api/segments/:id/leaderboard", async ({ res, params, query }) => {
+  const state = await db.load();
+  const segment = state.segments.find((s) => s.id === params.id);
+  if (!segment || !canAccessSegment(state, segment, query.get("deviceId"))) {
+    return sendJson(res, 404, { error: "Segment not found" });
+  }
 
   const runs = state.runs
     .filter((r) => r.segmentId === segment.id)
@@ -417,7 +461,9 @@ route("POST", "/api/segments/:id/runs", async ({ res, params, body }) => {
 
   const state = await db.load();
   const segment = state.segments.find((s) => s.id === params.id);
-  if (!segment) return sendJson(res, 404, { error: "Segment not found" });
+  if (!segment || !canAccessSegment(state, segment, deviceId)) {
+    return sendJson(res, 404, { error: "Segment not found" });
+  }
 
   const user = findUserByDevice(state, deviceId);
   if (!user) return sendJson(res, 400, { error: "Unknown deviceId; register the user first." });
@@ -441,7 +487,9 @@ route("POST", "/api/segments/:id/runs", async ({ res, params, body }) => {
 route("GET", "/api/segments/:id/ghost", async ({ res, params, query }) => {
   const state = await db.load();
   const segment = state.segments.find((s) => s.id === params.id);
-  if (!segment) return sendJson(res, 404, { error: "Segment not found" });
+  if (!segment || !canAccessSegment(state, segment, query.get("deviceId"))) {
+    return sendJson(res, 404, { error: "Segment not found" });
+  }
 
   const runs = state.runs
     .filter((r) => r.segmentId === segment.id)
@@ -477,6 +525,11 @@ route("GET", "/api/users/:deviceId/runs", async ({ res, params }) => {
       durationMs: r.durationMs,
       avgSpeedKmh: r.avgSpeedKmh,
       maxSpeedKmh: r.maxSpeedKmh ?? 0,
+      // The actual recorded trace's length, not just the segment's nominal
+      // length -- added for the stats screen's "distance driven" total.
+      // Uses `trace` (kept on every run since day one) rather than the
+      // segment's own lengthM so it reflects what was actually driven.
+      distanceM: Math.round(geo.polylineLength(r.trace || [])),
       recordedAt: r.recordedAt,
     }));
   sendJson(res, 200, runs);

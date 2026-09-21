@@ -12,6 +12,8 @@ import {
   SubmitTripResponse,
   PresenceUser,
   MapBounds,
+  RunHistoryEntry,
+  TripHistoryEntry,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -53,32 +55,53 @@ export const api = {
       body: JSON.stringify({ displayName }),
     }),
 
-  listSegments: () => request<SegmentSummary[]>("/api/segments"),
+  // `deviceId` is optional -- pass it so your own private tracks come back
+  // alongside the public ones; omit it (or an anonymous caller) for the
+  // public list only.
+  listSegments: (deviceId?: string) =>
+    request<SegmentSummary[]>(`/api/segments${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ""}`),
 
-  getSegment: (segmentId: string) => request<SegmentSummary>(`/api/segments/${segmentId}`),
+  getSegment: (segmentId: string, deviceId?: string) =>
+    request<SegmentSummary>(
+      `/api/segments/${segmentId}${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ""}`
+    ),
 
   // `trace` is the full recorded drive (with timestamps) that defines this
   // segment -- the backend auto-submits it as the segment's first run, so
   // the response includes that run alongside the segment (see
-  // CreateSegmentResponse).
+  // CreateSegmentResponse). `isPrivate` starts the track hidden from
+  // everyone but you -- toggle it later with setSegmentPrivacy.
   createSegment: (
     name: string,
     trace: { lat: number; lng: number; t: number }[],
     deviceId: string,
-    maxSpeedKmh: number
+    maxSpeedKmh: number,
+    isPrivate: boolean
   ) =>
     request<CreateSegmentResponse>("/api/segments", {
       method: "POST",
-      body: JSON.stringify({ name, trace, deviceId, maxSpeedKmh }),
+      body: JSON.stringify({ name, trace, deviceId, maxSpeedKmh, isPrivate }),
     }),
 
-  getLeaderboard: (segmentId: string) =>
-    request<LeaderboardResponse>(`/api/segments/${segmentId}/leaderboard`),
+  // Flip a track you created between private and public.
+  setSegmentPrivacy: (segmentId: string, deviceId: string, isPrivate: boolean) =>
+    request<SegmentSummary>(`/api/segments/${segmentId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ deviceId, isPrivate }),
+    }),
 
-  getGhost: (segmentId: string, runId?: string) =>
-    request<GhostProfileResponse>(
-      `/api/segments/${segmentId}/ghost${runId ? `?runId=${runId}` : ""}`
+  getLeaderboard: (segmentId: string, deviceId?: string) =>
+    request<LeaderboardResponse>(
+      `/api/segments/${segmentId}/leaderboard${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ""}`
     ),
+
+  getGhost: (segmentId: string, runId?: string, deviceId?: string) => {
+    const params = new URLSearchParams();
+    if (runId) params.set("runId", runId);
+    if (deviceId) params.set("deviceId", deviceId);
+    const qs = params.toString();
+    return request<GhostProfileResponse>(`/api/segments/${segmentId}/ghost${qs ? `?${qs}` : ""}`);
+  },
 
   submitRun: (
     segmentId: string,
@@ -91,7 +114,9 @@ export const api = {
       body: JSON.stringify({ deviceId, trace, maxSpeedKmh }),
     }),
 
-  getUserRuns: (deviceId: string) => request<any[]>(`/api/users/${deviceId}/runs`),
+  getUserRuns: (deviceId: string) => request<RunHistoryEntry[]>(`/api/users/${deviceId}/runs`),
+
+  getUserTrips: (deviceId: string) => request<TripHistoryEntry[]>(`/api/users/${deviceId}/trips`),
 
   // "Go to a place" -- destination search (Places), routing (Directions),
   // and submitting the resulting drive as a tracked trip.

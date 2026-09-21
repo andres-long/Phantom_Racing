@@ -9,6 +9,8 @@ export type SegmentSummary = {
   runCount: number;
   bestTimeMs: number | null;
   bestTimeUser: string | null;
+  creatorId: string;
+  isPrivate: boolean;
 };
 
 export type LeaderboardEntry = {
@@ -106,6 +108,30 @@ export type PresenceUser = {
 
 export type MapBounds = { north: number; south: number; east: number; west: number };
 
+// ---- Personal drive history (feeds the Stats screen) ------------------
+
+export type RunHistoryEntry = {
+  runId: string;
+  segmentId: string;
+  segmentName: string;
+  durationMs: number;
+  avgSpeedKmh: number;
+  maxSpeedKmh: number;
+  distanceM: number;
+  recordedAt: string;
+};
+
+export type TripHistoryEntry = {
+  tripId: string;
+  destinationName: string;
+  durationMs: number;
+  distanceM: number;
+  avgSpeedKmh: number;
+  maxSpeedKmh: number;
+  estimatedDurationMs: number | null;
+  recordedAt: string;
+};
+
 // Root navigator param list.
 export type RootStackParamList = {
   Welcome: undefined;
@@ -126,4 +152,5 @@ export type RootStackParamList = {
     durationS: number;
   };
   GoSummary: { result: SubmitTripResponse };
+  Stats: undefined;
 };

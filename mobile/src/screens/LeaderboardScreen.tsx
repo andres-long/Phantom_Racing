@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, FlatList, ActivityIndicator } from "react-nativ
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, LeaderboardEntry } from "../types";
 import { api } from "../api/client";
+import { useUser } from "../context/UserContext";
 import { formatDuration } from "../utils/geo";
 import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
@@ -11,17 +12,20 @@ type Props = NativeStackScreenProps<RootStackParamList, "Leaderboard">;
 
 export default function LeaderboardScreen({ route }: Props) {
   const { segmentId, segmentName } = route.params;
+  const { user } = useUser();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // deviceId included so a private track's creator can still see its
+    // leaderboard.
     api
-      .getLeaderboard(segmentId)
+      .getLeaderboard(segmentId, user?.deviceId)
       .then((res) => setEntries(res.leaderboard))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [segmentId]);
+  }, [segmentId, user?.deviceId]);
 
   return (
     <View style={styles.container}>

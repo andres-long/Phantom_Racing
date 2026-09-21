@@ -17,6 +17,7 @@ import LeaderboardScreen from "../screens/LeaderboardScreen";
 import GoToScreen from "../screens/GoToScreen";
 import GoRaceScreen from "../screens/GoRaceScreen";
 import GoSummaryScreen from "../screens/GoSummaryScreen";
+import StatsScreen from "../screens/StatsScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -96,6 +97,11 @@ export default function AppNavigator() {
               name="Leaderboard"
               component={LeaderboardScreen}
               options={{ ...headerOptions, headerShown: true, title: "" }}
+            />
+            <Stack.Screen
+              name="Stats"
+              component={StatsScreen}
+              options={{ ...headerOptions, headerShown: true, title: "YOUR STATS" }}
             />
           </>
         )}

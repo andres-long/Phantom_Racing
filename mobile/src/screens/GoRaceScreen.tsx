@@ -19,6 +19,7 @@ import {
   startBackgroundTracking,
   stopBackgroundTracking,
 } from "../backgroundLocation";
+import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
 
 type Props = NativeStackScreenProps<RootStackParamList, "GoRace">;
 type TracePoint = LatLng & { t: number };
@@ -73,6 +74,10 @@ export default function GoRaceScreen({ route, navigation }: Props) {
   const deviationStreakRef = useRef(0);
   const lastRerouteAtRef = useRef(0);
   const reroutingRef = useRef(false);
+  // Keeps this device visible on other users' maps while driving -- see
+  // usePresenceHeartbeat.
+  const presencePosRef: PresencePositionRef = useRef(null);
+  usePresenceHeartbeat(presencePosRef);
 
   useEffect(() => {
     plannedRouteRef.current = plannedRoute;
@@ -136,6 +141,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
 
     setMyPos({ lat: last.lat, lng: last.lng });
     if (last.heading != null) setHeading(last.heading);
+    presencePosRef.current = { coords: { lat: last.lat, lng: last.lng }, heading: last.heading ?? null };
     mapRef.current?.animateToRegion(
       { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 },
       500
@@ -208,6 +214,18 @@ export default function GoRaceScreen({ route, navigation }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Manual completion, for when the destination coordinate itself isn't
+  // reachable (a gated driveway, a parking lot GPS can't quite resolve, a
+  // spot indoors) so the automatic within-40m arrival check in
+  // handleLocationPoints never fires on its own.
+  const onFinishManually = () => {
+    if (trace.length < 2) {
+      Alert.alert("Not enough of a drive yet", "Drive a bit more before finishing.");
+      return;
+    }
+    finishTrip(trace);
+  };
 
   const onCancel = () => {
     Alert.alert("Cancel this trip?", "It won't be saved to your drive history.", [
@@ -288,11 +306,13 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      {submitting && (
-        <View style={styles.submittingBadge}>
-          <Text style={styles.submittingText}>SAVING TRIP...</Text>
-        </View>
-      )}
+      <NeonButton
+        label={submitting ? "SAVING TRIP..." : "FINISH DRIVE"}
+        onPress={onFinishManually}
+        disabled={submitting}
+        variant="outline"
+        style={styles.finishButton}
+      />
     </View>
   );
 }
@@ -327,14 +347,10 @@ const styles = StyleSheet.create({
   topSpeed: { color: colors.textMuted, fontSize: 12 },
   progressTrack: { height: 6, backgroundColor: colors.bgElevated, borderRadius: 3, marginTop: 12, overflow: "hidden" },
   progressFill: { height: 6, backgroundColor: colors.cyan },
-  submittingBadge: {
+  finishButton: {
     position: "absolute",
     bottom: 30,
     left: 20,
     right: 20,
-    ...panelStyle,
-    padding: 14,
-    alignItems: "center",
   },
-  submittingText: { color: colors.cyan, fontFamily: fonts.heading, fontSize: 13, letterSpacing: 1 },
 });

@@ -92,6 +92,15 @@ export const api = {
       body: JSON.stringify({ displayName, password }),
     }),
 
+  // Live "is this racer name free?" check for the sign-up/rename forms.
+  // Pass deviceId when renaming so your own current name counts as yours.
+  checkNameAvailable: (name: string, deviceId?: string) =>
+    poll<{ available: boolean; reason: string | null; name: string }>(
+      `/api/users/name-available?name=${encodeURIComponent(name)}${
+        deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ""
+      }`
+    ),
+
   updateDisplayName: (deviceId: string, displayName: string) =>
     request<User>(`/api/users/${deviceId}`, {
       method: "PATCH",

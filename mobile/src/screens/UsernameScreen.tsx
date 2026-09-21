@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RootStackParamList, BlockedPlayer } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
+import { useNameAvailability, NameStatus } from "../hooks/useNameAvailability";
 import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
 import NeonButton from "../components/NeonButton";
@@ -41,11 +42,17 @@ function AuthForm() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Only sign-up needs a free name; logging in needs an existing one.
+  const nameStatus = useNameAvailability(name, { skip: mode !== "signup" });
 
   const onSubmit = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       Alert.alert("Pick a name", "Other racers will see this on the leaderboard.");
+      return;
+    }
+    if (mode === "signup" && nameStatus.state === "unavailable") {
+      Alert.alert("Name not available", nameStatus.reason);
       return;
     }
     if (password.length < 4) {
@@ -90,6 +97,7 @@ function AuthForm() {
           autoCapitalize="none"
           autoCorrect={false}
         />
+        {mode === "signup" && <NameStatusLine status={nameStatus} />}
         <TextInput
           style={styles.input}
           placeholder="Password"
@@ -131,6 +139,20 @@ function AuthForm() {
   );
 }
 
+// Small line under a name box: checking / available / taken (or why not).
+function NameStatusLine({ status }: { status: NameStatus }) {
+  if (status.state === "idle") return null;
+  const text =
+    status.state === "checking"
+      ? "Checking name..."
+      : status.state === "available"
+      ? "Name available"
+      : status.reason;
+  const color =
+    status.state === "available" ? colors.cyan : status.state === "unavailable" ? colors.danger : colors.textMuted;
+  return <Text style={[styles.nameStatus, { color }]}>{text}</Text>;
+}
+
 const UNIT_OPTIONS: { key: "metric" | "imperial"; label: string }[] = [
   { key: "metric", label: "KM/H" },
   { key: "imperial", label: "MPH" },
@@ -153,6 +175,11 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
   const insets = useSafeAreaInsets();
   const [name, setName] = useState(user?.displayName ?? "");
   const [saving, setSaving] = useState(false);
+  // Skip the check while the box still holds your current name (exactly).
+  const renameStatus = useNameAvailability(name, {
+    skip: name.trim() === (user?.displayName ?? ""),
+    deviceId: user?.deviceId,
+  });
   const [blockedPlayers, setBlockedPlayers] = useState<BlockedPlayer[]>([]);
 
   const loadBlocked = async () => {
@@ -187,6 +214,10 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
     const trimmed = name.trim();
     if (!trimmed) {
       Alert.alert("Pick a name", "Other racers will see this on the leaderboard.");
+      return;
+    }
+    if (renameStatus.state === "unavailable") {
+      Alert.alert("Name not available", renameStatus.reason);
       return;
     }
     setSaving(true);
@@ -242,6 +273,7 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
           returnKeyType="done"
           onSubmitEditing={onSave}
         />
+        <NameStatusLine status={renameStatus} />
         <NeonButton
           label={saving ? "SAVING..." : "SAVE"}
           onPress={onSave}
@@ -375,6 +407,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   submitButton: { marginTop: 4 },
+  nameStatus: { fontSize: 12, fontWeight: "600", marginTop: -8, marginBottom: 14 },
   switchModeButton: { marginTop: 16 },
   logOutButton: { marginTop: 24 },
   sectionLabel: {

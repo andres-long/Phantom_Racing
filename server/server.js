@@ -110,9 +110,56 @@ function findUserByDevice(dbState, deviceId) {
   return dbState.users.find((u) => u.deviceId === deviceId);
 }
 
+// ---- Racer names: one per person -------------------------------------------
+//
+// Names are unique ignoring case, extra/odd whitespace and Unicode lookalike
+// forms (NFKC folds e.g. full-width "Ｒacer" into "Racer"), so near-copies
+// like "racer", "Racer " or "Racer  X" vs "Racer X" can't be registered
+// alongside an existing name.
+const NAME_MIN_LENGTH = 2;
+const NAME_MAX_LENGTH = 24;
+
+function normalizeName(raw) {
+  return String(raw || "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width characters
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function nameKey(raw) {
+  return normalizeName(raw).toLowerCase();
+}
+
+// Returns an error message if the name is unusable, else null.
+function validateName(name) {
+  if (!name) return "Pick a racer name.";
+  if (name.length < NAME_MIN_LENGTH) return `Racer names need at least ${NAME_MIN_LENGTH} characters.`;
+  if (name.length > NAME_MAX_LENGTH) return `Racer names can be at most ${NAME_MAX_LENGTH} characters.`;
+  return null;
+}
+
+// Every account whose name matches. Normally 0 or 1 -- more only for
+// duplicates created before names were enforced unique.
+function findUsersByName(dbState, displayName) {
+  const key = nameKey(displayName);
+  return dbState.users.filter((u) => nameKey(u.displayName) === key);
+}
+
 function findUserByName(dbState, displayName) {
-  const lower = displayName.toLowerCase();
-  return dbState.users.find((u) => u.displayName.toLowerCase() === lower);
+  return findUsersByName(dbState, displayName)[0];
+}
+
+// Serializes account-changing requests (sign-up, rename). Every route reads
+// the whole state, changes it and saves it back, so two sign-ups for the
+// same name arriving at the same moment could otherwise both pass the
+// "is it taken?" check before either saves. The backend is a single Node
+// process, so an in-process queue is enough.
+let accountQueue = Promise.resolve();
+function withAccountLock(fn) {
+  const run = accountQueue.then(fn, fn);
+  accountQueue = run.catch(() => {});
+  return run;
 }
 
 // Password hashing via Node's built-in crypto (scrypt) -- no extra
@@ -358,44 +405,70 @@ route("GET", "/api/health", async ({ res }) => {
 // accounts existed), this claims it instead of erroring, so nothing about
 // that history is lost.
 route("POST", "/api/auth/register", async ({ res, body }) => {
-  const name = (body.displayName || "").trim();
+  const name = normalizeName(body.displayName);
   const password = body.password || "";
-  if (!name) return sendJson(res, 400, { error: "Pick a racer name." });
+  const nameError = validateName(name);
+  if (nameError) return sendJson(res, 400, { error: nameError });
   if (password.length < 4) return sendJson(res, 400, { error: "Password must be at least 4 characters." });
 
-  const state = await db.load();
-  const existing = findUserByName(state, name);
+  await withAccountLock(async () => {
+    const state = await db.load();
+    const matches = findUsersByName(state, name);
 
-  let user;
-  if (existing && existing.passwordHash) {
-    return sendJson(res, 409, { error: "That name is already taken. Try logging in, or pick a different name." });
-  } else if (existing) {
-    existing.passwordHash = hashPassword(password);
-    user = existing;
-  } else {
-    user = {
-      id: db.id("user"),
-      deviceId: db.id("device"),
-      displayName: name,
-      passwordHash: hashPassword(password),
-      createdAt: new Date().toISOString(),
-    };
-    state.users.push(user);
-  }
-  await db.save(state);
-  sendJson(res, 200, publicUser(user));
+    let user;
+    if (matches.some((u) => u.passwordHash) || matches.length > 1) {
+      return sendJson(res, 409, { error: "That name is already taken. Try logging in, or pick a different name." });
+    } else if (matches.length === 1) {
+      // A pre-accounts record with no password yet -- claim it (keeps its
+      // history). Only when it's the one and only record with that name.
+      user = matches[0];
+      user.passwordHash = hashPassword(password);
+    } else {
+      user = {
+        id: db.id("user"),
+        deviceId: db.id("device"),
+        displayName: name,
+        passwordHash: hashPassword(password),
+        createdAt: new Date().toISOString(),
+      };
+      state.users.push(user);
+    }
+    await db.save(state);
+    sendJson(res, 200, publicUser(user));
+  });
+});
+
+// Live "is this name free?" check for the sign-up and rename forms, so you
+// find out while typing instead of after submitting. Pass deviceId when
+// renaming so your own current name counts as available to you. The real
+// guarantee is still the check inside register/rename; this is just UX.
+route("GET", "/api/users/name-available", async ({ res, query }) => {
+  const name = normalizeName(query.get("name"));
+  const nameError = validateName(name);
+  if (nameError) return sendJson(res, 200, { available: false, reason: nameError, name });
+  const state = await db.load();
+  const deviceId = query.get("deviceId");
+  const me = deviceId ? findUserByDevice(state, deviceId) : null;
+  const others = findUsersByName(state, name).filter((u) => !me || u.id !== me.id);
+  sendJson(res, 200, {
+    available: others.length === 0,
+    reason: others.length === 0 ? null : "That name is already taken.",
+    name,
+  });
 });
 
 // Log in from any device with a racer name + password, to pick up that
 // account's saved name and leaderboard history here.
 route("POST", "/api/auth/login", async ({ res, body }) => {
-  const name = (body.displayName || "").trim();
+  const name = normalizeName(body.displayName);
   const password = body.password || "";
   if (!name || !password) return sendJson(res, 400, { error: "Name and password are required." });
 
   const state = await db.load();
-  const user = findUserByName(state, name);
-  if (!user || !verifyPassword(password, user.passwordHash)) {
+  // Checks every account with this name (old duplicates can exist from
+  // before names were unique), so each one still logs into its own account.
+  const user = findUsersByName(state, name).find((u) => verifyPassword(password, u.passwordHash));
+  if (!user) {
     return sendJson(res, 401, { error: "Incorrect name or password." });
   }
   sendJson(res, 200, publicUser(user));
@@ -404,21 +477,24 @@ route("POST", "/api/auth/login", async ({ res, body }) => {
 // Rename an already-signed-in account. No password needed -- you're
 // already authenticated by having this device's saved account.
 route("PATCH", "/api/users/:deviceId", async ({ res, params, body }) => {
-  const name = (body.displayName || "").trim();
-  if (!name) return sendJson(res, 400, { error: "Pick a racer name." });
+  const name = normalizeName(body.displayName);
+  const nameError = validateName(name);
+  if (nameError) return sendJson(res, 400, { error: nameError });
 
-  const state = await db.load();
-  const user = findUserByDevice(state, params.deviceId);
-  if (!user) return sendJson(res, 404, { error: "User not found." });
+  await withAccountLock(async () => {
+    const state = await db.load();
+    const user = findUserByDevice(state, params.deviceId);
+    if (!user) return sendJson(res, 404, { error: "User not found." });
 
-  const clash = findUserByName(state, name);
-  if (clash && clash.id !== user.id) {
-    return sendJson(res, 409, { error: "That name is taken." });
-  }
+    const clash = findUsersByName(state, name).some((u) => u.id !== user.id);
+    if (clash) {
+      return sendJson(res, 409, { error: "That name is already taken." });
+    }
 
-  user.displayName = name;
-  await db.save(state);
-  sendJson(res, 200, publicUser(user));
+    user.displayName = name;
+    await db.save(state);
+    sendJson(res, 200, publicUser(user));
+  });
 });
 
 // List all segments with a leaderboard summary. `deviceId` is optional (an

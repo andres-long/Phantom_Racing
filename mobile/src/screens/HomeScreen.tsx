@@ -136,6 +136,9 @@ export default function HomeScreen({ navigation }: Props) {
   // regardless of what else is selected, since it can arrive at any time.
   const [incomingRace, setIncomingRace] = useState<RaceChallenge | null>(null);
   const [respondingIncoming, setRespondingIncoming] = useState(false);
+  // Racer picker (from the HUD's "N racers on the map" line), for when
+  // there's more than one to choose between.
+  const [pickingRacer, setPickingRacer] = useState(false);
 
   // Whether the map should keep recentering on you as you move. On by
   // default (that's the whole point of this fix -- your position marker
@@ -665,6 +668,10 @@ export default function HomeScreen({ navigation }: Props) {
         {userPos && (
           <Marker
             key={`me-${overlayEpoch}`}
+            // Below other racers' markers: when someone is right next to you
+            // the two overlap, and yours isn't tappable -- it would swallow
+            // the tap that's meant to open their RACE card.
+            zIndex={1}
             coordinate={{ latitude: userPos.lat, longitude: userPos.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
             rotation={heading}
@@ -677,6 +684,7 @@ export default function HomeScreen({ navigation }: Props) {
         {otherUsers.map((u) => (
           <Marker
             key={`${u.deviceId}-${overlayEpoch}`}
+            zIndex={5}
             coordinate={{ latitude: u.lat, longitude: u.lng }}
             anchor={{ x: 0.5, y: 0.5 }}
             rotation={u.heading ?? 0}
@@ -686,6 +694,7 @@ export default function HomeScreen({ navigation }: Props) {
               setSelectedId(null);
               setRaceStep("closed");
               setRaceError(null);
+              setPickingRacer(false);
               setSelectedUser(u);
             }}
           >
@@ -823,10 +832,27 @@ export default function HomeScreen({ navigation }: Props) {
             ? "No tracks nearby yet"
             : `${nearby.length} track${nearby.length === 1 ? "" : "s"} nearby${showTracks ? "" : " (hidden)"}`}
         </Text>
+        {/* Tapping this picks a racer without having to hit their marker --
+            markers overlap when someone is right beside you. One racer
+            selects them straight away; more than one opens a picker. */}
         {otherUsers.length > 0 && (
-          <Text style={styles.onlineCount}>
-            {otherUsers.length} racer{otherUsers.length === 1 ? "" : "s"} on the map
-          </Text>
+          <Pressable
+            onPress={() => {
+              setSelectedId(null);
+              setRaceError(null);
+              setRaceStep("closed");
+              if (otherUsers.length === 1) {
+                setSelectedUser(otherUsers[0]);
+              } else {
+                setPickingRacer(true);
+              }
+            }}
+            hitSlop={8}
+          >
+            <Text style={styles.onlineCount}>
+              {otherUsers.length} racer{otherUsers.length === 1 ? "" : "s"} on the map {">"}
+            </Text>
+          </Pressable>
         )}
         {voiceEnabled && connectedPeers.length > 0 && (
           <Text style={styles.voiceCount} numberOfLines={1}>
@@ -882,6 +908,30 @@ export default function HomeScreen({ navigation }: Props) {
               style={styles.cardButton}
             />
           </View>
+        </View>
+      )}
+
+      {pickingRacer && !selectedUser && (
+        <View style={[styles.card, { bottom: hudBottom }]}>
+          <Pressable style={styles.cardClose} onPress={() => setPickingRacer(false)} hitSlop={8}>
+            <Text style={styles.cardCloseText}>x</Text>
+          </Pressable>
+          <Text style={styles.cardTitle}>Racers nearby</Text>
+          {otherUsers.map((u) => (
+            <Pressable
+              key={u.deviceId}
+              style={styles.racerRow}
+              onPress={() => {
+                setPickingRacer(false);
+                setSelectedUser(u);
+              }}
+            >
+              <Text style={styles.racerRowName} numberOfLines={1}>
+                {u.displayName}
+              </Text>
+              <Text style={styles.racerRowGo}>{">"}</Text>
+            </Pressable>
+          ))}
         </View>
       )}
 
@@ -1135,6 +1185,15 @@ const styles = StyleSheet.create({
   cardMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
   cardActions: { flexDirection: "row", marginTop: 14, gap: 10 },
   cardButton: { flex: 1 },
+  racerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+  },
+  racerRowName: { flex: 1, color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
+  racerRowGo: { color: colors.cyan, fontSize: 15, fontWeight: "800" },
   raceErrorText: { color: colors.danger, fontSize: 12, marginBottom: 6, fontWeight: "600" },
   distanceRow: { flexDirection: "row", gap: 8, marginTop: 12 },
   distanceOption: {

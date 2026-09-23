@@ -14,6 +14,7 @@ import {
   RaceDistanceKey,
   RaceDirectionKey,
   RaceChallenge,
+  BusyDrive,
 } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
@@ -24,6 +25,7 @@ import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import { RACE_DISTANCES } from "../raceDistances";
 import { RACE_DIRECTIONS } from "../raceDirections";
+import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import NeonButton from "../components/NeonButton";
 import VehicleMarker from "../components/VehicleMarker";
 
@@ -76,8 +78,16 @@ function regionToBounds(region: Region): MapBounds {
 // speed, and any recorded tracks close enough to be worth racing right now.
 // Browsing the full list of every track ever recorded lives one tap away
 // (the "All tracks" button), since that's a secondary, occasional action.
-export default function HomeScreen({ navigation }: Props) {
+export default function HomeScreen({ navigation, route }: Props) {
   const { user, vehicleStyle, incognito, voiceEnabled, units, showTracks, setShowTracks } = useUser();
+  // Set when this Home was opened *on top of* a drive or race that's still
+  // running underneath (the MAP button on those screens pushes it here), so
+  // you can look around without ending what you were doing. Going back drops
+  // you straight back into it. While it's set, anything that would start a
+  // second drive is hidden -- you can't record two things at once.
+  const busy: BusyDrive | null = route.params?.busy ?? null;
+  const busyRef = useRef<BusyDrive | null>(null);
+  busyRef.current = busy;
   const { reportPosition, connectedPeers, talking, setTalking, micReady, micBlocked, retryMic } =
     useProximityVoiceContext();
   const [blocking, setBlocking] = useState(false);
@@ -295,11 +305,15 @@ export default function HomeScreen({ navigation }: Props) {
         if (!live) return;
         const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
         setSpeedKmh(currentSpeedKmh);
+        // Your top speed counts whenever the app is open, not just during a
+        // recorded drive -- this is the "just driving around" case.
+        recordSpeed(currentSpeedKmh);
 
         // Guarded to fire at most once per visit to this screen, so it
         // can't re-trigger every second while sitting still right at a
         // start line -- only an actual approach at driving speed counts.
-        if (!autoStarted && currentSpeedKmh >= AUTO_START_SPEED_KMH) {
+        // Never while something else is already recording underneath.
+        if (!busyRef.current && !autoStarted && currentSpeedKmh >= AUTO_START_SPEED_KMH) {
           const candidate = nearbyRef.current.find(
             (s) => s.points.length >= 2 && haversine(pos, s.points[0]) <= AUTO_START_RADIUS_M
           );
@@ -372,6 +386,9 @@ export default function HomeScreen({ navigation }: Props) {
         subscriptionRef.current?.remove();
         subscriptionRef.current = null;
         clearInterval(presenceTimer);
+        // Don't sit on a personal best set in the last few seconds while
+        // you wander off to another screen (or close the app from here).
+        flushTopSpeed();
       };
     }, [loadSegments, navigation, sendHeartbeatTick, refreshPresence, refreshIncomingRaces, reportPosition, locationRetry])
   );
@@ -796,6 +813,22 @@ export default function HomeScreen({ navigation }: Props) {
           </Pressable>
         </View>
 
+        {/* Still recording/racing underneath: this Home was pushed on top
+            of that screen rather than replacing it, so nothing was stopped
+            and going back returns to it exactly where it was. */}
+        {busy && (
+          <Pressable style={styles.busyBanner} onPress={() => navigation.goBack()}>
+            <View style={styles.busyBannerTextWrap}>
+              <Text style={styles.busyBannerTitle} numberOfLines={1}>
+                {busy.label}
+              </Text>
+              <Text style={styles.busyBannerSub}>Still running -- nothing was stopped</Text>
+            </View>
+            <Text style={styles.busyBannerAction}>
+              {busy.kind === "race" ? "BACK TO RACE" : "BACK TO IT"} {">"}
+            </Text>
+          </Pressable>
+        )}
         {locationBannerText && (
           <Pressable style={styles.locationBanner} onPress={fixLocation}>
             <Text style={styles.locationBannerText}>{locationBannerText}</Text>
@@ -912,11 +945,13 @@ export default function HomeScreen({ navigation }: Props) {
               : "No runs yet -- be the first"}
           </Text>
           <View style={styles.cardActions}>
-            <NeonButton
-              label="RACE IT"
-              onPress={() => navigation.navigate("RecordRun", { segmentId: selected.id })}
-              style={styles.cardButton}
-            />
+            {!busy && (
+              <NeonButton
+                label="RACE IT"
+                onPress={() => navigation.navigate("RecordRun", { segmentId: selected.id })}
+                style={styles.cardButton}
+              />
+            )}
             <NeonButton
               label="LEADERBOARD"
               variant="outline"
@@ -969,16 +1004,20 @@ export default function HomeScreen({ navigation }: Props) {
           {raceStep === "closed" && (
             <>
               {raceError && <Text style={styles.raceErrorText}>{raceError}</Text>}
-              <Text style={styles.cardMeta}>Nearby right now</Text>
+              <Text style={styles.cardMeta}>
+                {busy ? "Nearby right now -- finish what you're doing first to race them" : "Nearby right now"}
+              </Text>
               <View style={styles.cardActions}>
-                <NeonButton
-                  label="RACE"
-                  onPress={() => {
-                    setRaceError(null);
-                    setRaceStep("distance");
-                  }}
-                  style={styles.cardButton}
-                />
+                {!busy && (
+                  <NeonButton
+                    label="RACE"
+                    onPress={() => {
+                      setRaceError(null);
+                      setRaceStep("distance");
+                    }}
+                    style={styles.cardButton}
+                  />
+                )}
                 <NeonButton
                   label={blocking ? "BLOCKING..." : "BLOCK"}
                   variant="outline"
@@ -1043,7 +1082,9 @@ export default function HomeScreen({ navigation }: Props) {
         </View>
       )}
 
-      {incomingRace && (
+      {/* Not while you're already recording or racing something else --
+          accepting would start a second drive on top of the first. */}
+      {incomingRace && !busy && (
         <View style={[styles.incomingCard, { top: insets.top + 104 }]}>
           <Text style={styles.cardTitle}>Race request!</Text>
           <Text style={styles.cardMeta}>
@@ -1068,17 +1109,27 @@ export default function HomeScreen({ navigation }: Props) {
         </View>
       )}
 
-      <NeonButton
-        label="+ NEW SEGMENT"
-        variant="outline"
-        onPress={() => navigation.navigate("CreateSegment")}
-        style={[styles.fab, { bottom: bottomBase }]}
-      />
-      <NeonButton
-        label="GO TO..."
-        onPress={() => navigation.navigate("GoTo")}
-        style={[styles.fabRight, { bottom: bottomBase }]}
-      />
+      {busy ? (
+        <NeonButton
+          label={busy.kind === "race" ? "BACK TO THE RACE" : "BACK TO RECORDING"}
+          onPress={() => navigation.goBack()}
+          style={[styles.fabWide, { bottom: bottomBase }]}
+        />
+      ) : (
+        <>
+          <NeonButton
+            label="+ NEW SEGMENT"
+            variant="outline"
+            onPress={() => navigation.navigate("CreateSegment")}
+            style={[styles.fab, { bottom: bottomBase }]}
+          />
+          <NeonButton
+            label="GO TO..."
+            onPress={() => navigation.navigate("GoTo")}
+            style={[styles.fabRight, { bottom: bottomBase }]}
+          />
+        </>
+      )}
     </View>
   );
 }
@@ -1263,4 +1314,25 @@ const styles = StyleSheet.create({
     right: 20,
     width: "44%",
   },
+  // Takes the place of both FABs while something is recording underneath.
+  fabWide: {
+    position: "absolute",
+    bottom: 24,
+    left: 20,
+    right: 20,
+  },
+  busyBanner: {
+    backgroundColor: "#0a2430ee",
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.cyan,
+    padding: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  busyBannerTextWrap: { flex: 1 },
+  busyBannerTitle: { color: colors.textPrimary, fontSize: 12, fontWeight: "700" },
+  busyBannerSub: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
+  busyBannerAction: { color: colors.cyan, fontSize: 11, fontWeight: "800", letterSpacing: 0.5 },
 });

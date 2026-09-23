@@ -4,6 +4,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, GlobalStatsMetric, GlobalStatsResponse, GlobalStatsEntry } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
+import { knownTopSpeedKmh } from "../topSpeed";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
@@ -26,8 +27,10 @@ const METRICS: { key: GlobalStatsMetric; label: string }[] = [
 ];
 
 // Two views of the same numbers. MINE: your lifetime totals across
-// everything you've driven -- segment runs (racing a track) and Go To trips
-// (driving to a place) both count; average speed is distance-weighted
+// everything you've driven -- segment runs (racing a track), Go To trips
+// (driving to a place) and finished live races all count, and top speed
+// also counts plain driving with the app open, with nothing recorded at
+// all; average speed is distance-weighted
 // (total distance / total time), so a few long highway drives aren't
 // outweighed by lots of short, slow ones. WORLD: every racer's lifetime
 // totals (same definitions, computed server-side), ranked by one metric at a
@@ -66,9 +69,14 @@ function MyStats() {
     (async () => {
       try {
         setError(null);
-        const [runs, trips] = await Promise.all([
+        // Races and the passive top speed fall back rather than failing
+        // the whole screen: both are additions to what was already here,
+        // and an older backend simply doesn't have those routes.
+        const [runs, trips, races, top] = await Promise.all([
           api.getUserRuns(user.deviceId),
           api.getUserTrips(user.deviceId),
+          api.getUserRaces(user.deviceId).catch(() => []),
+          api.getTopSpeed(user.deviceId).catch(() => ({ topSpeedKmh: 0, topSpeedAt: null })),
         ]);
 
         let distanceM = 0;
@@ -84,12 +92,21 @@ function MyStats() {
           durationMs += t.durationMs;
           if (t.maxSpeedKmh > topSpeedKmh) topSpeedKmh = t.maxSpeedKmh;
         }
+        for (const r of races) {
+          distanceM += r.distanceM;
+          durationMs += r.durationMs;
+          if (r.maxSpeedKmh > topSpeedKmh) topSpeedKmh = r.maxSpeedKmh;
+        }
+        // Your fastest ever, including while you weren't recording anything
+        // -- knownTopSpeedKmh() covers a best set in this session that
+        // hasn't been sent to the server yet.
+        topSpeedKmh = Math.max(topSpeedKmh, top.topSpeedKmh, knownTopSpeedKmh());
 
         setTotals({
           topSpeedKmh,
           distanceM,
           avgSpeedKmh: durationMs > 0 ? distanceM / 1000 / (durationMs / 3_600_000) : 0,
-          driveCount: runs.length + trips.length,
+          driveCount: runs.length + trips.length + races.length,
         });
       } catch (e: any) {
         setError(e.message || "Couldn't reach the backend.");
@@ -107,7 +124,7 @@ function MyStats() {
         <ActivityIndicator color={colors.cyan} style={{ marginTop: 40 }} />
       ) : error ? (
         <Text style={styles.error}>{error}</Text>
-      ) : totals && totals.driveCount > 0 ? (
+      ) : totals && (totals.driveCount > 0 || totals.topSpeedKmh > 0) ? (
         <>
           <View style={styles.tile}>
             <Text style={styles.tileLabel}>TOP SPEED</Text>
@@ -125,12 +142,19 @@ function MyStats() {
             <Text style={styles.tileUnit}>{speedUnit(units)}</Text>
           </View>
           <Text style={styles.footnote}>
-            Based on {totals.driveCount} drive{totals.driveCount === 1 ? "" : "s"} -- segment runs and Go To trips
-            combined.
+            {totals.driveCount > 0
+              ? `Based on ${totals.driveCount} drive${
+                  totals.driveCount === 1 ? "" : "s"
+                } -- segment runs, Go To trips and live races combined. `
+              : "No recorded drives yet. "}
+            Top speed also counts plain driving with the app open.
           </Text>
         </>
       ) : (
-        <Text style={styles.empty}>No drives recorded yet -- race a segment or go somewhere to start building stats.</Text>
+        <Text style={styles.empty}>
+          Nothing yet -- drive with the app open and your top speed starts building on its own, or race a track for
+          the full set of stats.
+        </Text>
       )}
     </ScrollView>
   );

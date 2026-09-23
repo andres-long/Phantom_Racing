@@ -124,6 +124,11 @@ export type RaceResult = {
   avgSpeedKmh: number;
   maxSpeedKmh: number;
   finishedAt: string;
+  // Did they actually cover the target distance (rather than tapping FINISH
+  // NOW part-way), and did they give up? Both matter for who won -- duration
+  // alone can't decide it, since quitting early posts the shortest time.
+  completed: boolean;
+  forfeited: boolean;
 };
 
 export type RaceStatus = "pending" | "accepted" | "declined" | "cancelled" | "expired" | "finished";
@@ -199,6 +204,27 @@ export type TripHistoryEntry = {
   recordedAt: string;
 };
 
+// A finished live race, from your own side of it -- the third source of
+// drive stats alongside runs and trips.
+export type RaceHistoryEntry = {
+  raceId: string;
+  opponentDisplayName: string;
+  distanceLabel: string;
+  directionLabel: string;
+  durationMs: number;
+  distanceM: number;
+  avgSpeedKmh: number;
+  maxSpeedKmh: number;
+  forfeited: boolean;
+  // true you won, false they did, null a dead heat or they never finished.
+  won: boolean | null;
+  recordedAt: string;
+};
+
+// Your fastest speed the app has ever seen, recorded even when you weren't
+// racing or recording anything (see topSpeed.ts).
+export type TopSpeedResponse = { topSpeedKmh: number; topSpeedAt: string | null };
+
 // ---- Worldwide stats leaderboard (Stats screen's WORLD tab) ------------
 
 export type GlobalStatsMetric = "topSpeed" | "distance" | "avgSpeed";
@@ -224,12 +250,21 @@ export type GlobalStatsResponse = {
   me: GlobalStatsEntry | null;
 };
 
+// What you're in the middle of while taking a look at the map/menu. The
+// drive or race itself stays on the screen underneath (it keeps recording,
+// timing and reporting the whole time) -- Home is pushed on top of it, shows
+// a banner saying so, and going back drops you straight back into it.
+export type BusyDrive = {
+  kind: "run" | "segment" | "trip" | "race";
+  label: string;
+};
+
 // Root navigator param list.
 export type RootStackParamList = {
   Welcome: undefined;
   Disclaimer: undefined;
   Username: undefined;
-  Home: undefined;
+  Home: { busy?: BusyDrive } | undefined;
   AllSegments: undefined;
   CreateSegment: undefined;
   RecordRun: { segmentId: string; autoStart?: boolean };

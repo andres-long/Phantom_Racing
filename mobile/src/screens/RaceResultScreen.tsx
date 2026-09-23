@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, ActivityIndicator } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList, RaceChallenge } from "../types";
+import { RootStackParamList, RaceChallenge, RaceResult } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { formatDuration } from "../utils/geo";
@@ -78,11 +78,17 @@ export default function RaceResultScreen({ route, navigation }: Props) {
   }
 
   const waitingOnOpponent = !race.opponentResult;
-  const iWon =
-    race.opponentResult && race.myResult.durationMs !== race.opponentResult.durationMs
-      ? race.myResult.durationMs < race.opponentResult.durationMs
-      : null;
-  const isTie = race.opponentResult && race.myResult.durationMs === race.opponentResult.durationMs;
+  const iWon = race.opponentResult ? winnerIsMine(race.myResult, race.opponentResult) : null;
+  const isTie = !!race.opponentResult && iWon === null;
+  const note = race.myResult.forfeited
+    ? "You dropped out -- the drive still counts toward your stats."
+    : race.opponentResult?.forfeited
+    ? `${race.opponentDisplayName} dropped out.`
+    : race.opponentResult && !race.myResult.completed && race.opponentResult.completed
+    ? "You stopped short of the distance."
+    : race.opponentResult && race.myResult.completed && !race.opponentResult.completed
+    ? `${race.opponentDisplayName} stopped short of the distance.`
+    : null;
 
   return (
     <View style={styles.container}>
@@ -100,6 +106,7 @@ export default function RaceResultScreen({ route, navigation }: Props) {
       ) : (
         <Text style={iWon ? styles.win : styles.lose}>{iWon ? "YOU WIN" : "YOU LOSE"}</Text>
       )}
+      {note && <Text style={styles.note}>{note}</Text>}
 
       <View style={styles.resultsRow}>
         <View style={styles.resultCol}>
@@ -140,6 +147,26 @@ export default function RaceResultScreen({ route, navigation }: Props) {
   );
 }
 
+// Who took it. Giving up loses outright however good the clock looked,
+// then actually covering the distance beats stopping short of it, and only
+// between two racers in the same bracket does the time (or, if neither went
+// the distance, who got further) decide. null is a dead heat. Mirrors
+// raceWinnerIsMine on the backend.
+function winnerIsMine(mine: RaceResult, theirs: RaceResult): boolean | null {
+  const rank = (r: RaceResult) => (r.forfeited ? 2 : r.completed ? 0 : 1);
+  const a = rank(mine);
+  const b = rank(theirs);
+  if (a !== b) return a < b;
+  if (a === 0) {
+    if (mine.durationMs === theirs.durationMs) return null;
+    return mine.durationMs < theirs.durationMs;
+  }
+  const myDist = mine.distanceM ?? 0;
+  const theirDist = theirs.distanceM ?? 0;
+  if (myDist === theirDist) return null;
+  return myDist > theirDist;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center", padding: 24 },
   errorText: { color: colors.danger, fontSize: 14, fontWeight: "600", textAlign: "center", marginBottom: 16 },
@@ -163,5 +190,6 @@ const styles = StyleSheet.create({
   resultTime: { color: colors.textPrimary, fontFamily: fonts.display, fontSize: 26 },
   resultDetail: { color: colors.textMuted, fontSize: 12, marginTop: 4 },
   resultPending: { color: colors.textMuted, fontSize: 13, marginTop: 10, fontStyle: "italic" },
+  note: { color: colors.textSecondary, fontSize: 13, textAlign: "center", marginTop: 10 },
   button: { marginTop: 36, width: "100%" },
 });

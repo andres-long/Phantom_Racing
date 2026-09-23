@@ -21,6 +21,7 @@ import {
   stopBackgroundTracking,
 } from "../backgroundLocation";
 import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
+import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "GoRace">;
 type TracePoint = LatLng & { t: number };
@@ -150,6 +151,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
       500
     );
     setSpeedKmh(last.speedKmh);
+    recordSpeed(last.speedKmh);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
       setMaxSpeedKmh(last.speedKmh);
@@ -230,9 +232,18 @@ export default function GoRaceScreen({ route, navigation }: Props) {
     finishTrip(trace);
   };
 
+  // Opens the map/menu on top of this screen instead of replacing it, so
+  // the drive keeps being tracked while you look around -- Home shows a
+  // banner, and going back drops you straight back into the drive.
+  const openMenu = () => {
+    flushTopSpeed();
+    navigation.push("Home", { busy: { kind: "trip", label: `Driving to ${destinationName}` } });
+  };
+
   const onCancel = () => {
-    Alert.alert("Cancel this trip?", "It won't be saved to your drive history.", [
+    Alert.alert("Leave this trip?", "You can take a look at the map without ending it.", [
       { text: "Keep driving", style: "cancel" },
+      { text: "Map (keep driving)", onPress: openMenu },
       {
         text: "Cancel trip",
         style: "destructive",
@@ -291,6 +302,10 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         <Text style={styles.cancelText}>x</Text>
       </Pressable>
 
+      <Pressable style={[styles.menuButton, { top: insets.top + 10 }]} onPress={openMenu} hitSlop={10}>
+        <Text style={styles.menuButtonText}>MAP</Text>
+      </Pressable>
+
       <View style={[styles.hud, { top: insets.top + 20 }]}>
         <Text style={styles.destName} numberOfLines={1}>
           {destinationName}
@@ -335,6 +350,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   cancelText: { color: colors.cyan, fontSize: 16, fontWeight: "800" },
+  // Beside the x: the map/menu, without ending the drive.
+  menuButton: {
+    position: "absolute",
+    left: 60,
+    height: 36,
+    paddingHorizontal: 12,
+    borderRadius: 4,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.panelBorder,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  menuButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "800", letterSpacing: 1 },
   hud: {
     position: "absolute",
     left: 20,

@@ -28,6 +28,7 @@ import {
   stopBackgroundTracking,
 } from "../backgroundLocation";
 import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
+import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
 type TracePoint = LatLng & { t: number };
@@ -159,6 +160,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
       500
     );
     setSpeedKmh(last.speedKmh);
+    recordSpeed(last.speedKmh);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
       setMaxSpeedKmh(last.speedKmh);
@@ -227,10 +229,21 @@ export default function RecordRunScreen({ route, navigation }: Props) {
 
   const stopRun = () => finishRun(trace);
 
+  // The map/menu opens *on top of* this screen rather than replacing it, so
+  // the run keeps being timed and recorded the whole time you're over there
+  // -- Home shows a banner, and coming back lands you right here.
+  const openMenu = () => {
+    flushTopSpeed();
+    navigation.push("Home", {
+      busy: { kind: "run", label: `Timing your run on ${segment?.name ?? "this track"}` },
+    });
+  };
+
   const onCancel = () => {
     if (recording) {
-      Alert.alert("Cancel this run?", "Your progress won't be saved.", [
+      Alert.alert("Leave this run?", "You can take a look at the map without ending it.", [
         { text: "Keep racing", style: "cancel" },
+        { text: "Map (keep timing)", onPress: openMenu },
         {
           text: "Cancel run",
           style: "destructive",
@@ -302,6 +315,12 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         <Text style={styles.cancelText}>x</Text>
       </Pressable>
 
+      {recording && (
+        <Pressable style={[styles.menuButton, { top: insets.top + 10 }]} onPress={openMenu} hitSlop={10}>
+          <Text style={styles.menuButtonText}>MAP</Text>
+        </Pressable>
+      )}
+
       <View style={[styles.hud, { top: insets.top + 20 }]}>
         <Text style={styles.segmentName}>{segment.name}</Text>
         {autoStart && <Text style={styles.autoBadge}>AUTO-DETECTED -- RACING STARTED AUTOMATICALLY</Text>}
@@ -351,6 +370,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   cancelText: { color: colors.cyan, fontSize: 16, fontWeight: "800" },
+  // Sits beside the x: takes you to the map without ending anything.
+  menuButton: {
+    position: "absolute",
+    left: 60,
+    height: 36,
+    paddingHorizontal: 12,
+    borderRadius: 4,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.panelBorder,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  menuButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "800", letterSpacing: 1 },
   hud: {
     position: "absolute",
     left: 20,

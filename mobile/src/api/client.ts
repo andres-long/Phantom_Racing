@@ -14,6 +14,8 @@ import {
   MapBounds,
   RunHistoryEntry,
   TripHistoryEntry,
+  RaceHistoryEntry,
+  TopSpeedResponse,
   RaceChallenge,
   RaceDistanceKey,
   RaceDirectionKey,
@@ -171,6 +173,20 @@ export const api = {
 
   getUserTrips: (deviceId: string) => request<TripHistoryEntry[]>(`/api/users/${deviceId}/trips`),
 
+  getUserRaces: (deviceId: string) => request<RaceHistoryEntry[]>(`/api/users/${deviceId}/races`),
+
+  // Your fastest speed ever, tracked whenever the app is open -- not just
+  // during a recorded drive. Reported with poll() rather than the default
+  // timeout: it's a background nicety, and it must never hold a connection
+  // slot that something the user is waiting on could use.
+  getTopSpeed: (deviceId: string) => poll<TopSpeedResponse>(`/api/users/${deviceId}/top-speed`),
+
+  reportTopSpeed: (deviceId: string, speedKmh: number) =>
+    poll<TopSpeedResponse>(`/api/users/${deviceId}/top-speed`, {
+      method: "POST",
+      body: JSON.stringify({ speedKmh }),
+    }),
+
   // Everyone's lifetime stats ranked by one metric, plus your own rank.
   getGlobalStats: (metric: GlobalStatsMetric, deviceId?: string) =>
     request<GlobalStatsResponse>(
@@ -271,6 +287,22 @@ export const api = {
     maxSpeedKmh: number
   ) =>
     request<RaceChallenge>(`/api/races/${raceId}/finish`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId, durationMs, distanceM, avgSpeedKmh, maxSpeedKmh }),
+    }),
+
+  // Dropping out: the opponent takes the win, and the distance you did
+  // cover still counts toward your own stats. Distinct from cancelRace,
+  // which voids the race for both of you and records nothing.
+  forfeitRace: (
+    raceId: string,
+    deviceId: string,
+    durationMs: number,
+    distanceM: number,
+    avgSpeedKmh: number,
+    maxSpeedKmh: number
+  ) =>
+    request<RaceChallenge>(`/api/races/${raceId}/forfeit`, {
       method: "POST",
       body: JSON.stringify({ deviceId, durationMs, distanceM, avgSpeedKmh, maxSpeedKmh }),
     }),

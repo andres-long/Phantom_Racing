@@ -199,6 +199,12 @@ function publicUser(user) {
   return { id: user.id, deviceId: user.deviceId, displayName: user.displayName, createdAt: user.createdAt };
 }
 
+// Nothing on a public road gets past this, so anything above it is a GPS
+// glitch rather than a drive -- used to clamp every speed the app reports
+// (runs, trips, races and the passive top-speed tracker alike) so one bad
+// fix can't park itself at the top of the leaderboard forever.
+const MAX_PLAUSIBLE_SPEED_KMH = 350;
+
 // A run whose average speed is not physically plausible -- either an
 // absurd absolute speed, or higher than the phone's own recorded top
 // speed for that same run (average can never exceed max) -- almost
@@ -323,6 +329,34 @@ function normalizeRaceStatus(race) {
   return race;
 }
 
+// A finished racer's own side of a race, normalized for the client.
+// `completed` (did they actually cover the target distance, rather than
+// finishing early by hand) and `forfeited` (they gave up, so the other side
+// wins whatever the clock says) are what the result screen ranks on --
+// duration alone can't, since quitting after ten seconds would otherwise
+// post the fastest time. Results recorded before these flags existed are
+// treated as a normal completed finish, which is what they were.
+function raceResultView(race, result) {
+  if (!result) return null;
+  const dist = RACE_DISTANCES[race.distanceKey];
+  const target = dist ? dist.meters : race.distanceM || 0;
+  const completed =
+    typeof result.completed === "boolean"
+      ? result.completed
+      : !Number.isFinite(result.distanceM) || target <= 0
+      ? true
+      : result.distanceM >= target * 0.99;
+  return {
+    durationMs: result.durationMs,
+    distanceM: Number.isFinite(result.distanceM) ? result.distanceM : null,
+    avgSpeedKmh: result.avgSpeedKmh ?? 0,
+    maxSpeedKmh: result.maxSpeedKmh ?? 0,
+    finishedAt: result.finishedAt,
+    completed,
+    forfeited: !!result.forfeited,
+  };
+}
+
 // Client-facing view of a race challenge, from one specific viewer's side --
 // "my" vs "opponent" rather than "from" vs "to", so the same shape works
 // whether the viewer sent or received the challenge, and the client never
@@ -354,8 +388,8 @@ function raceSummary(dbState, race, viewerUserId) {
     opponentDisplayName: opponentUser?.displayName ?? "Unknown",
     myProgress: race.progress?.[viewerUserId] ?? null,
     opponentProgress: race.progress?.[opponentId] ?? null,
-    myResult: race.results?.[viewerUserId] ?? null,
-    opponentResult: race.results?.[opponentId] ?? null,
+    myResult: raceResultView(race, race.results?.[viewerUserId]),
+    opponentResult: raceResultView(race, race.results?.[opponentId]),
   };
 }
 
@@ -684,6 +718,95 @@ route("GET", "/api/segments/:id/ghost", async ({ res, params, query }) => {
   });
 });
 
+// Your fastest speed ever seen by the app, including while you weren't
+// recording anything -- the phone reports a new personal best as it happens
+// (see topSpeed.ts on the client) and this keeps the highest one. Stored on
+// the account, so it follows you to a new phone like everything else.
+route("POST", "/api/users/:deviceId/top-speed", async ({ res, params, body }) => {
+  const speedKmh = Number(body.speedKmh);
+  if (!Number.isFinite(speedKmh) || speedKmh <= 0) {
+    return sendJson(res, 400, { error: "A valid speedKmh is required" });
+  }
+  if (speedKmh > MAX_PLAUSIBLE_SPEED_KMH) {
+    // Not an error worth surfacing on the phone -- just refuse to store it.
+    const state = await db.load();
+    const user = findUserByDevice(state, params.deviceId);
+    if (!user) return sendJson(res, 404, { error: "User not found" });
+    return sendJson(res, 200, { topSpeedKmh: user.topSpeedKmh ?? 0, topSpeedAt: user.topSpeedAt ?? null });
+  }
+
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found" });
+
+  const rounded = Math.round(speedKmh * 10) / 10;
+  if (rounded > (user.topSpeedKmh ?? 0)) {
+    user.topSpeedKmh = rounded;
+    user.topSpeedAt = new Date().toISOString();
+    await db.save(state);
+  }
+  sendJson(res, 200, { topSpeedKmh: user.topSpeedKmh ?? 0, topSpeedAt: user.topSpeedAt ?? null });
+});
+
+route("GET", "/api/users/:deviceId/top-speed", async ({ res, params }) => {
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found" });
+  sendJson(res, 200, { topSpeedKmh: user.topSpeedKmh ?? 0, topSpeedAt: user.topSpeedAt ?? null });
+});
+
+// Finished live races, newest first -- the third source of drive stats
+// alongside segment runs and Go To trips. A forfeited race still appears:
+// you drove that distance, it just didn't win.
+route("GET", "/api/users/:deviceId/races", async ({ res, params }) => {
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found" });
+
+  const entries = (state.races || [])
+    .filter((r) => r.status === "finished" && r.results?.[user.id])
+    .map((r) => {
+      const opponentId = r.fromUserId === user.id ? r.toUserId : r.fromUserId;
+      const mine = raceResultView(r, r.results[user.id]);
+      const theirs = raceResultView(r, r.results?.[opponentId]);
+      const dist = RACE_DISTANCES[r.distanceKey];
+      const dirKey = RACE_DIRECTIONS[r.directionKey] ? r.directionKey : DEFAULT_RACE_DIRECTION;
+      return {
+        raceId: r.id,
+        opponentDisplayName: state.users.find((u) => u.id === opponentId)?.displayName ?? "Unknown",
+        distanceLabel: dist ? dist.label : "",
+        directionLabel: RACE_DIRECTIONS[dirKey].label,
+        durationMs: mine.durationMs,
+        distanceM: mine.distanceM ?? 0,
+        avgSpeedKmh: mine.avgSpeedKmh,
+        maxSpeedKmh: mine.maxSpeedKmh,
+        forfeited: mine.forfeited,
+        won: theirs ? raceWinnerIsMine(mine, theirs) : null,
+        recordedAt: mine.finishedAt || r.finishedAt,
+      };
+    })
+    .sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt));
+  sendJson(res, 200, entries);
+});
+
+// Who took it, given both sides' results: giving up loses outright, then
+// actually covering the distance beats stopping short, and only after that
+// does the clock decide. null means a dead heat.
+function raceWinnerIsMine(mine, theirs) {
+  const rank = (r) => (r.forfeited ? 2 : r.completed ? 0 : 1);
+  const a = rank(mine);
+  const b = rank(theirs);
+  if (a !== b) return a < b;
+  if (a === 0) {
+    if (mine.durationMs === theirs.durationMs) return null;
+    return mine.durationMs < theirs.durationMs;
+  }
+  const myDist = mine.distanceM ?? 0;
+  const theirDist = theirs.distanceM ?? 0;
+  if (myDist === theirDist) return null;
+  return myDist > theirDist;
+}
+
 route("GET", "/api/users/:deviceId/runs", async ({ res, params }) => {
   const state = await db.load();
   const user = findUserByDevice(state, params.deviceId);
@@ -902,7 +1025,8 @@ route("GET", "/api/users/:deviceId/trips", async ({ res, params }) => {
 // ---- Worldwide stats leaderboard ------------------------------------------
 //
 // Everyone's lifetime numbers, same definitions as the personal Stats screen
-// (segment runs + Go To trips combined; average speed distance-weighted =
+// (segment runs + Go To trips + finished live races combined, plus the
+// passive top speed for the speed board; average speed distance-weighted =
 // total distance / total time), ranked by one metric at a time. Returns the
 // top GLOBAL_STATS_LIMIT plus the caller's own entry and rank, so you can
 // see where you stand even when you're not in the top list.
@@ -930,6 +1054,32 @@ function computeGlobalStats(state) {
   }
   for (const t of state.trips || []) {
     add(t.userId, t.distanceM, t.durationMs, t.maxSpeedKmh ?? 0);
+  }
+  // Live head-to-head races count too -- including forfeited ones, since
+  // the driving happened either way.
+  for (const race of state.races || []) {
+    if (race.status !== "finished") continue;
+    for (const userId of [race.fromUserId, race.toUserId]) {
+      const result = raceResultView(race, race.results?.[userId]);
+      if (!result || !(result.durationMs > 0)) continue;
+      if (isImplausibleRun(result.avgSpeedKmh, result.maxSpeedKmh)) continue;
+      add(userId, result.distanceM ?? 0, result.durationMs, result.maxSpeedKmh);
+    }
+  }
+
+  // A personal best set while just driving around with the app open counts
+  // for the top-speed board even with no recorded drive behind it -- it
+  // only tops up topSpeedKmh, never distance/time/drive count, so it can't
+  // affect the distance or average-speed boards.
+  for (const user of state.users) {
+    const passive = user.topSpeedKmh ?? 0;
+    if (!(passive > 0)) continue;
+    let s = byUser.get(user.id);
+    if (!s) {
+      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0 };
+      byUser.set(user.id, s);
+    }
+    if (passive > s.topSpeedKmh) s.topSpeedKmh = passive;
   }
 
   const entries = [];
@@ -1212,6 +1362,24 @@ route("POST", "/api/races/:id/progress", async ({ res, params, body }) => {
   sendJson(res, 200, raceSummary(state, race, me.id));
 });
 
+// One racer's stored result. Speeds are clamped/validated here rather than
+// at each call site so a finish, an early finish and a forfeit all record
+// the same shape (which is what the stats totals and the result screen
+// both read).
+function buildRaceResult({ durationMs, distanceM, avgSpeedKmh, maxSpeedKmh, completed, forfeited }) {
+  return {
+    durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0,
+    distanceM: Number.isFinite(distanceM) ? Math.max(0, distanceM) : null,
+    avgSpeedKmh: Number.isFinite(avgSpeedKmh) ? Math.round(Math.max(0, avgSpeedKmh) * 10) / 10 : 0,
+    maxSpeedKmh: Number.isFinite(maxSpeedKmh)
+      ? Math.round(Math.min(Math.max(0, maxSpeedKmh), MAX_PLAUSIBLE_SPEED_KMH) * 10) / 10
+      : 0,
+    finishedAt: new Date().toISOString(),
+    completed: !!completed,
+    forfeited: !!forfeited,
+  };
+}
+
 route("POST", "/api/races/:id/finish", async ({ res, params, body }) => {
   const deviceId = (body.deviceId || "").trim();
   const durationMs = Number(body.durationMs);
@@ -1232,20 +1400,71 @@ route("POST", "/api/races/:id/finish", async ({ res, params, body }) => {
     return sendJson(res, 409, { error: "This race isn't currently active." });
   }
 
-  const rawMaxSpeed = Number(body.maxSpeedKmh);
-  const rawAvgSpeed = Number(body.avgSpeedKmh);
-  race.results[me.id] = {
+  const dist = RACE_DISTANCES[race.distanceKey];
+  const targetM = dist ? dist.meters : race.distanceM || 0;
+  race.results[me.id] = buildRaceResult({
     durationMs,
-    distanceM: Number.isFinite(distanceM) ? distanceM : null,
-    avgSpeedKmh: Number.isFinite(rawAvgSpeed) ? Math.round(rawAvgSpeed * 10) / 10 : 0,
-    maxSpeedKmh: Number.isFinite(rawMaxSpeed) ? Math.round(Math.min(rawMaxSpeed, 350) * 10) / 10 : 0,
-    finishedAt: new Date().toISOString(),
-  };
+    distanceM,
+    avgSpeedKmh: Number(body.avgSpeedKmh),
+    maxSpeedKmh: Number(body.maxSpeedKmh),
+    // Finishing by hand part-way down the road is allowed (see the FINISH
+    // NOW button), it just doesn't count as covering the distance.
+    completed: Number.isFinite(distanceM) ? distanceM >= targetM * 0.99 : true,
+    forfeited: false,
+  });
 
   if (race.results[race.fromUserId] && race.results[race.toUserId]) {
     race.status = "finished";
     race.finishedAt = new Date().toISOString();
   }
+  await db.save(state);
+  sendJson(res, 200, raceSummary(state, race, me.id));
+});
+
+// One racer giving up: the race ends immediately and the other side wins,
+// whatever the clock says. Distinct from cancel (which voids the race for
+// both of you and records nothing) -- this is the "I'm out, you take it"
+// option, and the driving you did up to that point still counts toward your
+// stats, the same way an abandoned Go To drive would if you saved it.
+route("POST", "/api/races/:id/forfeit", async ({ res, params, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+
+  const race = state.races.find((r) => r.id === params.id);
+  if (!race || (race.fromUserId !== me.id && race.toUserId !== me.id)) {
+    return sendJson(res, 404, { error: "Race not found" });
+  }
+  if (race.status !== "accepted") {
+    return sendJson(res, 409, { error: "This race isn't currently active." });
+  }
+
+  const opponentId = race.fromUserId === me.id ? race.toUserId : race.fromUserId;
+  race.results[me.id] = buildRaceResult({
+    durationMs: Number(body.durationMs),
+    distanceM: Number(body.distanceM),
+    avgSpeedKmh: Number(body.avgSpeedKmh),
+    maxSpeedKmh: Number(body.maxSpeedKmh),
+    completed: false,
+    forfeited: true,
+  });
+  // The opponent doesn't have to keep driving to collect the win -- if they
+  // haven't finished yet, their live progress is banked as their result.
+  if (!race.results[opponentId]) {
+    const p = race.progress?.[opponentId];
+    race.results[opponentId] = buildRaceResult({
+      durationMs: p ? p.elapsedMs : 0,
+      distanceM: p ? p.distanceM : 0,
+      avgSpeedKmh:
+        p && p.elapsedMs > 0 ? p.distanceM / 1000 / (p.elapsedMs / 3600000) : 0,
+      maxSpeedKmh: p ? p.speedKmh : 0,
+      completed: false,
+      forfeited: false,
+    });
+  }
+  race.status = "finished";
+  race.finishedAt = new Date().toISOString();
   await db.save(state);
   sendJson(res, 200, raceSummary(state, race, me.id));
 });

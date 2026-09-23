@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { User } from "../types";
 import { VehicleStyle } from "../components/VehicleMarker";
 import { Units } from "../utils/units";
+import { setTopSpeedUser } from "../topSpeed";
 
 type UserContextValue = {
   user: User | null;
@@ -115,6 +116,14 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     })();
   }, []);
+
+  // The passive top-speed tracker (topSpeed.ts) is module-level, not a
+  // hook, so it needs telling whose account to record against whenever that
+  // changes -- on cold start once the saved account loads, after a
+  // login/register, and on log out (null, which stops it recording).
+  useEffect(() => {
+    setTopSpeedUser(user?.deviceId ?? null);
+  }, [user?.deviceId]);
 
   const persistUser = async (nextUser: User) => {
     await AsyncStorage.setItem(ACCOUNT_KEY, JSON.stringify(nextUser));

@@ -9,7 +9,7 @@ import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
 import { formatDuration } from "../utils/geo";
-import { displaySpeedKmh, speedUnit } from "../utils/units";
+import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
@@ -23,6 +23,7 @@ import {
 } from "../backgroundLocation";
 import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
 import { directionalProgressM } from "../raceDirections";
+import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RaceLive">;
 
@@ -154,11 +155,26 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     };
   }, [phase, race?.raceStartAt]);
 
+  // What you actually drove so far, for whichever way this race ends. Until
+  // the countdown hits zero there's no race yet, so it's all zeroes.
+  const raceSoFar = () => {
+    const started = actualStartRef.current > 0;
+    const durationMs = started ? Math.max(1, Date.now() - actualStartRef.current) : 0;
+    const distanceM = started ? distanceCoveredRef.current : 0;
+    return {
+      durationMs,
+      distanceM,
+      avgSpeedKmh: durationMs > 0 ? distanceM / 1000 / (durationMs / 3600000) : 0,
+      maxSpeedKmh: maxSpeedRef.current,
+    };
+  };
+
   const finishRace = async (finalDistanceM: number) => {
     if (finishedRef.current || !user) return;
     finishedRef.current = true;
     setPhase("ending");
     await stopBackgroundTracking();
+    flushTopSpeed();
     const durationMs = Math.max(1, Date.now() - actualStartRef.current);
     const avgSpeedKmh = finalDistanceM / 1000 / (durationMs / 3600000);
     try {
@@ -169,6 +185,54 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       // response, so a dropped finish call isn't a dead end.
     }
     navigation.replace("RaceResult", { raceId });
+  };
+
+  // Ending it here on purpose, short of the full distance: the time counts
+  // and the drive counts toward your stats, but stopping short loses to
+  // someone who actually covered the distance (see raceResultView on the
+  // backend). Finishing at or past the target is just a normal finish.
+  const onFinishNow = () => {
+    if (finishedRef.current) return;
+    const remainingM = Math.max(0, targetDistanceRef.current - distanceCoveredRef.current);
+    Alert.alert(
+      "Finish the race here?",
+      remainingM > 0
+        ? `You're still ${formatDistanceShort(remainingM, units)} short of the full ${race?.distanceLabel ?? "distance"}. Your time gets recorded, but stopping short loses to anyone who goes the distance.`
+        : "Your result will be recorded now.",
+      [
+        { text: "Keep racing", style: "cancel" },
+        { text: "Finish now", onPress: () => finishRace(distanceCoveredRef.current) },
+      ]
+    );
+  };
+
+  // Dropping out: the other racer takes the win right away (they don't have
+  // to keep driving to collect it), and the distance you did cover still
+  // counts toward your own stats.
+  const forfeit = async () => {
+    if (finishedRef.current || !user) return;
+    finishedRef.current = true;
+    setPhase("ending");
+    await stopBackgroundTracking();
+    flushTopSpeed();
+    const { durationMs, distanceM, avgSpeedKmh, maxSpeedKmh } = raceSoFar();
+    try {
+      await api.forfeitRace(raceId, user.deviceId, durationMs, distanceM, avgSpeedKmh, maxSpeedKmh);
+    } catch {
+      // Same as finishing: the result screen re-fetches the race itself.
+    }
+    navigation.replace("RaceResult", { raceId });
+  };
+
+  // The map/menu opens on top of this screen instead of replacing it, so
+  // the race keeps running underneath -- still timing, still tracking,
+  // still reporting your progress to your opponent. Home shows a banner
+  // saying so, and going back drops you straight back into the race.
+  const openMenu = () => {
+    flushTopSpeed();
+    navigation.push("Home", {
+      busy: { kind: "race", label: `Racing ${race?.opponentDisplayName ?? "another driver"}` },
+    });
   };
 
   // Fed by the background-capable location task (same as RecordRun/GoRace)
@@ -190,6 +254,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     );
     setSpeedKmh(last.speedKmh);
     speedKmhRef.current = last.speedKmh;
+    recordSpeed(last.speedKmh);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
     }
@@ -289,19 +354,19 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   }, []);
 
   const onBail = () => {
-    Alert.alert("Give up this race?", "It ends for both of you -- no result will be recorded.", [
-      { text: "Keep racing", style: "cancel" },
-      {
-        text: "Give up",
-        style: "destructive",
-        onPress: async () => {
-          finishedRef.current = true;
-          await stopBackgroundTracking();
-          if (user) api.cancelRace(raceId, user.deviceId).catch(() => {});
-          navigation.goBack();
+    Alert.alert(
+      "Leave the race?",
+      "You can look at the map without ending it -- the race keeps running while you're there.",
+      [
+        { text: "Keep racing", style: "cancel" },
+        { text: "Map (keep racing)", onPress: openMenu },
+        {
+          text: `Forfeit -- ${race?.opponentDisplayName ?? "they"} win`,
+          style: "destructive",
+          onPress: forfeit,
         },
-      },
-    ]);
+      ]
+    );
   };
 
   if (loadError) {
@@ -363,6 +428,11 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
         <Text style={styles.cancelText}>x</Text>
       </Pressable>
 
+      {/* Straight to the map, without ending the race. */}
+      <Pressable style={[styles.menuButton, { top: insets.top + 10 }]} onPress={openMenu} hitSlop={10}>
+        <Text style={styles.menuButtonText}>MAP</Text>
+      </Pressable>
+
       {phase === "countdown" && (
         <View style={styles.countdownOverlay}>
           <Text style={styles.countdownVs}>VS {race.opponentDisplayName.toUpperCase()}</Text>
@@ -413,6 +483,15 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
           )}
         </View>
       )}
+
+      {/* Always a way out that isn't "keep driving until the distance is
+          done": end it here and keep your time, or hand them the win. */}
+      {phase === "racing" && (
+        <View style={[styles.raceActions, { bottom: insets.bottom + 24 }]}>
+          <NeonButton label="FINISH NOW" variant="outline" onPress={onFinishNow} style={styles.raceActionButton} />
+          <NeonButton label="FORFEIT" variant="outline" onPress={onBail} style={styles.raceActionButton} />
+        </View>
+      )}
     </View>
   );
 }
@@ -435,6 +514,27 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   cancelText: { color: colors.cyan, fontSize: 16, fontWeight: "800" },
+  menuButton: {
+    position: "absolute",
+    left: 60,
+    height: 36,
+    paddingHorizontal: 12,
+    borderRadius: 4,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.panelBorder,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  menuButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "800", letterSpacing: 1 },
+  raceActions: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    flexDirection: "row",
+    gap: 12,
+  },
+  raceActionButton: { flex: 1 },
   countdownOverlay: {
     ...StyleSheet.absoluteFill,
     alignItems: "center",

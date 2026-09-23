@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, TextInput, Alert, Switch, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, TextInput, Alert, Switch, ActivityIndicator, Pressable } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,6 +21,7 @@ import {
   stopBackgroundTracking,
 } from "../backgroundLocation";
 import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
+import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
 type TracePoint = LatLng & { t: number };
@@ -108,6 +109,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
     if (last.heading != null) setHeading(last.heading);
     presencePosRef.current = { coords: { lat: last.lat, lng: last.lng }, heading: last.heading ?? null };
     setSpeedKmh(last.speedKmh);
+    recordSpeed(last.speedKmh);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
     }
@@ -134,6 +136,14 @@ export default function CreateSegmentScreen({ navigation }: Props) {
     setRecording(true);
     setBackgroundLocationListener(handleLocationPoints);
     await startBackgroundTracking("Recording a new road segment. Tap to return to Phantom Racing.");
+  };
+
+  // The map/menu opens on top of this screen rather than replacing it, so
+  // the road keeps being recorded while you're over there -- Home shows a
+  // banner, and going back returns you to the recording.
+  const openMenu = () => {
+    flushTopSpeed();
+    navigation.push("Home", { busy: { kind: "segment", label: "Recording a new track" } });
   };
 
   const stopRecording = () => {
@@ -238,6 +248,11 @@ export default function CreateSegmentScreen({ navigation }: Props) {
               {displaySpeedKmh(speedKmh, units)} {speedUnit(units)}
             </Text>
             <Text style={styles.trackingHint}>This drive will count as your first run on the leaderboard</Text>
+            {/* Look at the map without stopping: this opens Home on top of
+                the recording rather than leaving it. */}
+            <Pressable style={styles.menuButton} onPress={openMenu} hitSlop={8}>
+              <Text style={styles.menuButtonText}>MAP -- KEEP RECORDING {">"}</Text>
+            </Pressable>
           </>
         )}
       </View>
@@ -294,6 +309,16 @@ const styles = StyleSheet.create({
   hudText: { color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 13, textAlign: "center", letterSpacing: 1 },
   speedText: { color: colors.cyan, fontFamily: fonts.display, fontSize: 20, textAlign: "center", marginTop: 6 },
   trackingHint: { color: colors.textSecondary, fontSize: 11, textAlign: "center", marginTop: 6 },
+  menuButton: {
+    marginTop: 10,
+    alignSelf: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.panelBorder,
+  },
+  menuButtonText: { color: colors.cyan, fontSize: 11, fontWeight: "800", letterSpacing: 0.5 },
   button: {
     position: "absolute",
     bottom: 30,

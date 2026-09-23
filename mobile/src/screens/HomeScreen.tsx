@@ -12,6 +12,7 @@ import {
   PresenceUser,
   MapBounds,
   RaceDistanceKey,
+  RaceDirectionKey,
   RaceChallenge,
 } from "../types";
 import { api } from "../api/client";
@@ -22,6 +23,7 @@ import { displaySpeedKmh, speedUnit, formatDistanceShort, formatDistanceLong } f
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
 import { RACE_DISTANCES } from "../raceDistances";
+import { RACE_DIRECTIONS } from "../raceDirections";
 import NeonButton from "../components/NeonButton";
 import VehicleMarker from "../components/VehicleMarker";
 
@@ -127,7 +129,9 @@ export default function HomeScreen({ navigation }: Props) {
   // (mirrors selectedId/selected for tracks, just for people instead of
   // roads); raceStep drives what the selected-player card shows next.
   const [selectedUser, setSelectedUser] = useState<PresenceUser | null>(null);
-  const [raceStep, setRaceStep] = useState<"closed" | "distance" | "waiting">("closed");
+  const [raceStep, setRaceStep] = useState<"closed" | "distance" | "direction" | "waiting">("closed");
+  // Distance picked in the first step, held while they choose a direction.
+  const [pendingDistanceKey, setPendingDistanceKey] = useState<RaceDistanceKey | null>(null);
   const [creatingChallenge, setCreatingChallenge] = useState(false);
   const [pendingRaceId, setPendingRaceId] = useState<string | null>(null);
   const [pendingDistanceLabel, setPendingDistanceLabel] = useState<string | null>(null);
@@ -529,14 +533,26 @@ export default function HomeScreen({ navigation }: Props) {
 
   const formatDistance = (m: number) => `${formatDistanceShort(m, units)} away`;
 
-  const handleSelectDistance = async (distanceKey: RaceDistanceKey) => {
-    if (!user || !selectedUser || creatingChallenge) return;
+  const handleSelectDistance = (distanceKey: RaceDistanceKey) => {
+    setPendingDistanceKey(distanceKey);
+    setRaceStep("direction");
+  };
+
+  // Both racers run the same way: only progress in this compass direction
+  // counts toward the target distance (see raceDirections.ts).
+  const handleSelectDirection = async (directionKey: RaceDirectionKey) => {
+    if (!user || !selectedUser || !pendingDistanceKey || creatingChallenge) return;
     setCreatingChallenge(true);
     setRaceError(null);
     try {
-      const race = await api.createRaceChallenge(user.deviceId, selectedUser.deviceId, distanceKey);
+      const race = await api.createRaceChallenge(
+        user.deviceId,
+        selectedUser.deviceId,
+        pendingDistanceKey,
+        directionKey
+      );
       setPendingRaceId(race.id);
-      setPendingDistanceLabel(race.distanceLabel);
+      setPendingDistanceLabel(`${race.distanceLabel} ${race.directionLabel}`);
       setRaceStep("waiting");
     } catch (e: any) {
       setRaceError(e.message || "Couldn't send the race request.");
@@ -989,6 +1005,27 @@ export default function HomeScreen({ navigation }: Props) {
                   </Pressable>
                 ))}
               </View>
+            </>
+          )}
+
+          {raceStep === "direction" && (
+            <>
+              <Text style={styles.cardMeta}>
+                Which way are you racing? Only distance covered that way counts, so pick the direction
+                the road actually goes.
+              </Text>
+              <View style={styles.distanceRow}>
+                {RACE_DIRECTIONS.map((d) => (
+                  <Pressable
+                    key={d.key}
+                    style={styles.distanceOption}
+                    onPress={() => handleSelectDirection(d.key)}
+                    disabled={creatingChallenge}
+                  >
+                    <Text style={styles.distanceOptionText}>{d.short}</Text>
+                  </Pressable>
+                ))}
+              </View>
               {creatingChallenge && <ActivityIndicator color={colors.cyan} style={{ marginTop: 10 }} />}
             </>
           )}
@@ -1010,7 +1047,8 @@ export default function HomeScreen({ navigation }: Props) {
         <View style={[styles.incomingCard, { top: insets.top + 104 }]}>
           <Text style={styles.cardTitle}>Race request!</Text>
           <Text style={styles.cardMeta}>
-            {incomingRace.opponentDisplayName} wants to race you -- {incomingRace.distanceLabel}
+            {incomingRace.opponentDisplayName} wants to race you -- {incomingRace.distanceLabel}{" "}
+            {incomingRace.directionLabel}
           </Text>
           <View style={styles.cardActions}>
             <NeonButton

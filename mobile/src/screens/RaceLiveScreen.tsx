@@ -8,7 +8,7 @@ import { RootStackParamList, LatLng, RaceChallenge, RaceProgress } from "../type
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
-import { haversine, formatDuration } from "../utils/geo";
+import { formatDuration } from "../utils/geo";
 import { displaySpeedKmh, speedUnit } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -22,6 +22,7 @@ import {
   stopBackgroundTracking,
 } from "../backgroundLocation";
 import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
+import { directionalProgressM } from "../raceDirections";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RaceLive">;
 
@@ -70,6 +71,12 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   const actualStartRef = useRef<number>(0);
   const finishedRef = useRef(false);
   const targetDistanceRef = useRef(0);
+  // Where we were when the countdown hit zero, and which way this race
+  // runs: progress is how far we've got from that point in that direction,
+  // so both racers are running the same race and doubling back doesn't
+  // score (see raceDirections.ts).
+  const startPointRef = useRef<LatLng | null>(null);
+  const directionRef = useRef<"north" | "east" | "south" | "west">("north");
   const presencePosRef: PresencePositionRef = useRef(null);
   usePresenceHeartbeat(presencePosRef);
 
@@ -104,6 +111,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
           return;
         }
         targetDistanceRef.current = r.distanceM;
+        directionRef.current = r.directionKey || "north";
         setRace(r);
         setPhase("countdown");
       } catch (e: any) {
@@ -186,13 +194,17 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       maxSpeedRef.current = last.speedKmh;
     }
 
-    for (const p of points) {
-      const pt = { lat: p.lat, lng: p.lng };
-      if (lastPointRef.current) {
-        distanceCoveredRef.current += haversine(lastPointRef.current, pt);
-      }
-      lastPointRef.current = pt;
+    // The first fix after the countdown is the start line.
+    if (!startPointRef.current) {
+      startPointRef.current = { lat: points[0].lat, lng: points[0].lng };
     }
+    lastPointRef.current = pos;
+    // Never below zero: driving the wrong way just leaves you at the line
+    // rather than digging a hole you have to climb back out of.
+    distanceCoveredRef.current = Math.max(
+      0,
+      directionalProgressM(startPointRef.current, pos, directionRef.current)
+    );
     setDistanceCoveredM(distanceCoveredRef.current);
     setTrace((prev) => [...prev, ...points.map((p) => ({ lat: p.lat, lng: p.lng }))]);
     setElapsedMs(Date.now() - actualStartRef.current);
@@ -217,6 +229,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       await requestBackgroundLocationPermission();
       if (cancelled) return;
       lastPointRef.current = null;
+      startPointRef.current = null;
       distanceCoveredRef.current = 0;
       setBackgroundLocationListener(handleLocationPoints);
       await startBackgroundTracking(
@@ -353,7 +366,9 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       {phase === "countdown" && (
         <View style={styles.countdownOverlay}>
           <Text style={styles.countdownVs}>VS {race.opponentDisplayName.toUpperCase()}</Text>
-          <Text style={styles.countdownDistance}>{race.distanceLabel}</Text>
+          <Text style={styles.countdownDistance}>
+            {race.distanceLabel} {race.directionLabel}
+          </Text>
           <Text style={styles.countdownNumber}>{countdownS && countdownS > 0 ? countdownS : "GO"}</Text>
         </View>
       )}
@@ -361,7 +376,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       {(phase === "racing" || phase === "ending") && (
         <View style={[styles.hud, { top: insets.top + 20 }]}>
           <Text style={styles.raceLabel} numberOfLines={1}>
-            {race.distanceLabel} VS {race.opponentDisplayName}
+            {race.distanceLabel} {race.directionLabel} VS {race.opponentDisplayName}
           </Text>
           <Text style={styles.time}>{formatDuration(elapsedMs)}</Text>
           <Text style={styles.speed}>

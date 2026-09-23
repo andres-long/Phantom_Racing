@@ -112,6 +112,10 @@ export type MapBounds = { north: number; south: number; east: number; west: numb
 
 export type RaceDistanceKey = "quarter" | "mile" | "five";
 
+// Which way a race is run -- both racers agree up front, and only progress
+// in that direction counts (see raceDirections.ts).
+export type RaceDirectionKey = "north" | "east" | "south" | "west";
+
 export type RaceProgress = { distanceM: number; elapsedMs: number; speedKmh: number; updatedAt: string };
 
 export type RaceResult = {
@@ -131,6 +135,9 @@ export type RaceChallenge = {
   distanceKey: RaceDistanceKey;
   distanceM: number;
   distanceLabel: string;
+  directionKey: RaceDirectionKey;
+  directionLabel: string;
+  directionBearing: number;
   status: RaceStatus;
   createdAt: string;
   raceStartAt: string | null;

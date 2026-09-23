@@ -41,6 +41,19 @@ const RACE_DISTANCES = {
 // racers are physically near each other right now, so a request that sits
 // unanswered for minutes stops meaning anything (they may have driven apart
 // already).
+// Which way the race is run. Both racers agree on one compass direction up
+// front, and each one's progress counts only how far they get in that
+// direction (see the client's projection math) -- so a head-to-head race is
+// actually the same race for both, and driving the opposite way doesn't
+// score. Mirrored client-side in mobile/src/raceDirections.ts.
+const RACE_DIRECTIONS = {
+  north: { label: "NORTH", bearing: 0 },
+  east: { label: "EAST", bearing: 90 },
+  south: { label: "SOUTH", bearing: 180 },
+  west: { label: "WEST", bearing: 270 },
+};
+const DEFAULT_RACE_DIRECTION = "north";
+
 const RACE_REQUEST_TIMEOUT_MS = 45000;
 // Gap between "accepted" and the actual start, so both phones can count down
 // from the same server-issued timestamp rather than starting the instant
@@ -320,11 +333,18 @@ function raceSummary(dbState, race, viewerUserId) {
   const toUser = dbState.users.find((u) => u.id === race.toUserId);
   const opponentUser = dbState.users.find((u) => u.id === opponentId);
   const dist = RACE_DISTANCES[race.distanceKey];
+  // Races created before directions existed have none -- treat them as
+  // north so old records still render instead of breaking the screen.
+  const dirKey = RACE_DIRECTIONS[race.directionKey] ? race.directionKey : DEFAULT_RACE_DIRECTION;
+  const dir = RACE_DIRECTIONS[dirKey];
   return {
     id: race.id,
     distanceKey: race.distanceKey,
     distanceM: dist ? dist.meters : race.distanceM,
     distanceLabel: dist ? dist.label : "",
+    directionKey: dirKey,
+    directionLabel: dir.label,
+    directionBearing: dir.bearing,
     status: race.status,
     createdAt: race.createdAt,
     raceStartAt: race.raceStartAt || null,
@@ -1047,6 +1067,7 @@ route("POST", "/api/races", async ({ res, body }) => {
       error: `fromDeviceId, toDeviceId, and a valid distanceKey (${Object.keys(RACE_DISTANCES).join(", ")}) are required`,
     });
   }
+  const directionKey = RACE_DIRECTIONS[body.directionKey] ? body.directionKey : DEFAULT_RACE_DIRECTION;
 
   const state = await db.load();
   const fromUser = findUserByDevice(state, fromDeviceId);
@@ -1072,6 +1093,7 @@ route("POST", "/api/races", async ({ res, body }) => {
     fromUserId: fromUser.id,
     toUserId: toUser.id,
     distanceKey,
+    directionKey,
     status: "pending",
     createdAt: new Date().toISOString(),
     respondedAt: null,

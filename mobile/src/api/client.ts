@@ -16,6 +16,7 @@ import {
   TripHistoryEntry,
   RaceChallenge,
   RaceDistanceKey,
+  RaceDirectionKey,
   VoicePeer,
   VoiceSignal,
   VoiceSignalKind,
@@ -232,10 +233,15 @@ export const api = {
   // Live race challenges -- head-to-head against a specific nearby player,
   // addressed by deviceId (the same id presence markers already carry, so a
   // tap on a marker needs no extra lookup).
-  createRaceChallenge: (fromDeviceId: string, toDeviceId: string, distanceKey: RaceDistanceKey) =>
+  createRaceChallenge: (
+    fromDeviceId: string,
+    toDeviceId: string,
+    distanceKey: RaceDistanceKey,
+    directionKey: RaceDirectionKey
+  ) =>
     request<RaceChallenge>("/api/races", {
       method: "POST",
-      body: JSON.stringify({ fromDeviceId, toDeviceId, distanceKey }),
+      body: JSON.stringify({ fromDeviceId, toDeviceId, distanceKey, directionKey }),
     }),
 
   getIncomingRaceChallenges: (deviceId: string) =>

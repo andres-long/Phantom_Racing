@@ -143,6 +143,9 @@ export default function HomeScreen({ navigation, route }: Props) {
   // Distance picked in the first step, held while they choose a direction.
   const [pendingDistanceKey, setPendingDistanceKey] = useState<RaceDistanceKey | null>(null);
   const [creatingChallenge, setCreatingChallenge] = useState(false);
+  // Kept so a blocked challenge can be retried with the same direction
+  // after clearing a stale race (see clearStuckRaceAndRetry).
+  const [pendingDirectionKey, setPendingDirectionKey] = useState<RaceDirectionKey | null>(null);
   const [pendingRaceId, setPendingRaceId] = useState<string | null>(null);
   const [pendingDistanceLabel, setPendingDistanceLabel] = useState<string | null>(null);
   const [raceError, setRaceError] = useState<string | null>(null);
@@ -562,6 +565,7 @@ export default function HomeScreen({ navigation, route }: Props) {
     setCreatingChallenge(true);
     setRaceError(null);
     try {
+      setPendingDirectionKey(directionKey);
       const race = await api.createRaceChallenge(
         user.deviceId,
         selectedUser.deviceId,
@@ -574,6 +578,31 @@ export default function HomeScreen({ navigation, route }: Props) {
     } catch (e: any) {
       setRaceError(e.message || "Couldn't send the race request.");
       setRaceStep("closed");
+    } finally {
+      setCreatingChallenge(false);
+    }
+  };
+
+  // "There's already an open race with this player" -- usually a race one
+  // of the phones walked away from. Clear it and send the challenge again
+  // rather than leaving the pair unable to race each other at all.
+  const clearStuckRaceAndRetry = async () => {
+    if (!user || !selectedUser || !pendingDistanceKey || creatingChallenge) return;
+    setCreatingChallenge(true);
+    setRaceError(null);
+    try {
+      await api.clearRacesWith(user.deviceId, selectedUser.deviceId);
+      const race = await api.createRaceChallenge(
+        user.deviceId,
+        selectedUser.deviceId,
+        pendingDistanceKey,
+        pendingDirectionKey ?? "north"
+      );
+      setPendingRaceId(race.id);
+      setPendingDistanceLabel(`${race.distanceLabel} ${race.directionLabel}`);
+      setRaceStep("waiting");
+    } catch (e: any) {
+      setRaceError(e.message || "Couldn't clear that race.");
     } finally {
       setCreatingChallenge(false);
     }
@@ -1004,6 +1033,15 @@ export default function HomeScreen({ navigation, route }: Props) {
           {raceStep === "closed" && (
             <>
               {raceError && <Text style={styles.raceErrorText}>{raceError}</Text>}
+              {/* The open race is almost always one somebody walked away
+                  from -- offer to clear it instead of dead-ending here. */}
+              {raceError?.includes("already an open race") && !busy && (
+                <Pressable onPress={clearStuckRaceAndRetry} disabled={creatingChallenge} hitSlop={6}>
+                  <Text style={styles.raceErrorAction}>
+                    {creatingChallenge ? "CLEARING..." : "CLEAR IT AND RACE AGAIN >"}
+                  </Text>
+                </Pressable>
+              )}
               <Text style={styles.cardMeta}>
                 {busy ? "Nearby right now -- finish what you're doing first to race them" : "Nearby right now"}
               </Text>
@@ -1284,6 +1322,7 @@ const styles = StyleSheet.create({
   racerRowName: { flex: 1, color: colors.textPrimary, fontSize: 15, fontWeight: "700" },
   racerRowGo: { color: colors.cyan, fontSize: 15, fontWeight: "800" },
   raceErrorText: { color: colors.danger, fontSize: 12, marginBottom: 6, fontWeight: "600" },
+  raceErrorAction: { color: colors.cyan, fontSize: 12, fontWeight: "800", letterSpacing: 0.5, marginBottom: 8 },
   distanceRow: { flexDirection: "row", gap: 8, marginTop: 12 },
   distanceOption: {
     flex: 1,

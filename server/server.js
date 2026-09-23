@@ -55,6 +55,12 @@ const RACE_DIRECTIONS = {
 const DEFAULT_RACE_DIRECTION = "north";
 
 const RACE_REQUEST_TIMEOUT_MS = 45000;
+// An accepted race that's gone quiet this long -- no progress posted, no
+// finish, no cancel -- is treated as abandoned. Without this an accepted
+// race stayed open forever if either phone was closed mid-race, and the
+// pair could never challenge each other again ("There's already an open
+// race with this player"), with no way out from inside the app.
+const RACE_ABANDON_TIMEOUT_MS = 15 * 60 * 1000;
 // Gap between "accepted" and the actual start, so both phones can count down
 // from the same server-issued timestamp rather than starting the instant
 // each individual device happens to receive the accept.
@@ -326,7 +332,24 @@ function normalizeRaceStatus(race) {
   if (race.status === "pending" && Date.now() - new Date(race.createdAt).getTime() > RACE_REQUEST_TIMEOUT_MS) {
     race.status = "expired";
   }
+  if (race.status === "accepted" && Date.now() - lastRaceActivityMs(race) > RACE_ABANDON_TIMEOUT_MS) {
+    race.status = "expired";
+  }
   return race;
+}
+
+// The most recent sign of life on a race: when it started, either racer's
+// last progress ping, or either racer's finish.
+function lastRaceActivityMs(race) {
+  const times = [race.raceStartAt, race.respondedAt, race.createdAt];
+  for (const p of Object.values(race.progress || {})) times.push(p.updatedAt);
+  for (const r of Object.values(race.results || {})) times.push(r.finishedAt);
+  let newest = 0;
+  for (const t of times) {
+    const ms = t ? new Date(t).getTime() : 0;
+    if (Number.isFinite(ms) && ms > newest) newest = ms;
+  }
+  return newest;
 }
 
 // A finished racer's own side of a race, normalized for the client.
@@ -806,6 +829,68 @@ function raceWinnerIsMine(mine, theirs) {
   if (myDist === theirDist) return null;
   return myDist > theirDist;
 }
+
+// Delete an account and everything tied to it. Password-confirmed, since
+// deviceId alone travels in URLs. Public tracks this racer created are kept
+// -- other people race them and they're part of the map -- but every run,
+// trip, race, block and private track of theirs goes. Their presence record
+// is left to go stale on its own (25s) rather than reaching into the
+// separate presence store. Also what app stores require an account-holder
+// to be able to do.
+route("POST", "/api/users/:deviceId/delete", async ({ res, params, body }) => {
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found" });
+  if (user.passwordHash && !verifyPassword(body.password || "", user.passwordHash)) {
+    return sendJson(res, 401, { error: "Wrong password." });
+  }
+
+  const removed = {
+    runs: 0,
+    trips: 0,
+    races: 0,
+    blocks: 0,
+    privateSegments: 0,
+    keptPublicSegments: 0,
+  };
+
+  state.runs = (state.runs || []).filter((r) => {
+    if (r.userId !== user.id) return true;
+    removed.runs += 1;
+    return false;
+  });
+  state.trips = (state.trips || []).filter((t) => {
+    if (t.userId !== user.id) return true;
+    removed.trips += 1;
+    return false;
+  });
+  state.races = (state.races || []).filter((r) => {
+    if (r.fromUserId !== user.id && r.toUserId !== user.id) return true;
+    removed.races += 1;
+    return false;
+  });
+  state.blocks = (state.blocks || []).filter((b) => {
+    if (b.blockerUserId !== user.id && b.blockedUserId !== user.id) return true;
+    removed.blocks += 1;
+    return false;
+  });
+  state.segments = (state.segments || []).filter((s) => {
+    if (s.creatorId !== user.id) return true;
+    if (s.isPrivate) {
+      removed.privateSegments += 1;
+      return false;
+    }
+    removed.keptPublicSegments += 1;
+    return true;
+  });
+  // Any runs other people set on a kept track are untouched; the deleted
+  // racer's own runs are gone, so leaderboards and best times recompute
+  // themselves from what's left.
+  state.users = state.users.filter((u) => u.id !== user.id);
+
+  await db.save(state);
+  sendJson(res, 200, { deleted: true, displayName: user.displayName, removed });
+});
 
 route("GET", "/api/users/:deviceId/runs", async ({ res, params }) => {
   const state = await db.load();
@@ -1467,6 +1552,37 @@ route("POST", "/api/races/:id/forfeit", async ({ res, params, body }) => {
   race.finishedAt = new Date().toISOString();
   await db.save(state);
   sendJson(res, 200, raceSummary(state, race, me.id));
+});
+
+// "Clear whatever's open between us and let me challenge them again." The
+// escape hatch for a race left open by a phone that closed mid-race: the
+// challenge route refuses a second race with the same player, and before
+// this there was no way to find that stale race's id from the app. Cancels
+// (never finishes) every open race between the two, so nothing is recorded
+// for either side.
+route("POST", "/api/races/clear", async ({ res, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const otherDeviceId = (body.otherDeviceId || "").trim();
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  const them = findUserByDevice(state, otherDeviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+  if (!them) return sendJson(res, 404, { error: "That player isn't available right now." });
+
+  let cleared = 0;
+  for (const race of state.races) {
+    normalizeRaceStatus(race);
+    if (!["pending", "accepted"].includes(race.status)) continue;
+    const pair =
+      (race.fromUserId === me.id && race.toUserId === them.id) ||
+      (race.fromUserId === them.id && race.toUserId === me.id);
+    if (!pair) continue;
+    race.status = "cancelled";
+    race.finishedAt = new Date().toISOString();
+    cleared += 1;
+  }
+  await db.save(state);
+  sendJson(res, 200, { cleared });
 });
 
 // Either racer can always bail -- a request still pending, or a race

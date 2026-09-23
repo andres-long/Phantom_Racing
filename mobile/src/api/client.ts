@@ -307,6 +307,22 @@ export const api = {
       body: JSON.stringify({ deviceId, durationMs, distanceM, avgSpeedKmh, maxSpeedKmh }),
     }),
 
+  // Cancels whatever race is still open between the two of you, so a race
+  // left hanging by a closed app doesn't permanently block new challenges.
+  clearRacesWith: (deviceId: string, otherDeviceId: string) =>
+    request<{ cleared: number }>(`/api/races/clear`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId, otherDeviceId }),
+    }),
+
+  // Deletes the account and everything tied to it (runs, trips, races,
+  // blocks, private tracks); public tracks they created stay on the map.
+  deleteAccount: (deviceId: string, password: string) =>
+    request<{ deleted: boolean; displayName: string }>(`/api/users/${deviceId}/delete`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+
   cancelRace: (raceId: string, deviceId: string) =>
     request<RaceChallenge>(`/api/races/${raceId}/cancel`, {
       method: "POST",

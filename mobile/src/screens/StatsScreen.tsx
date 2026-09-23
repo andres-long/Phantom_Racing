@@ -16,6 +16,8 @@ type Totals = {
   distanceM: number;
   avgSpeedKmh: number;
   driveCount: number;
+  raceCount: number;
+  raceWins: number;
 };
 
 type Tab = "mine" | "world";
@@ -24,6 +26,7 @@ const METRICS: { key: GlobalStatsMetric; label: string }[] = [
   { key: "topSpeed", label: "TOP SPEED" },
   { key: "distance", label: "DISTANCE" },
   { key: "avgSpeed", label: "AVG SPEED" },
+  { key: "wins", label: "RACE WINS" },
 ];
 
 // Two views of the same numbers. MINE: your lifetime totals across
@@ -107,6 +110,8 @@ function MyStats() {
           distanceM,
           avgSpeedKmh: durationMs > 0 ? distanceM / 1000 / (durationMs / 3_600_000) : 0,
           driveCount: runs.length + trips.length + races.length,
+          raceCount: races.length,
+          raceWins: races.filter((r) => r.won === true).length,
         });
       } catch (e: any) {
         setError(e.message || "Couldn't reach the backend.");
@@ -141,6 +146,13 @@ function MyStats() {
             <Text style={styles.tileValue}>{displaySpeedKmh(totals.avgSpeedKmh, units)}</Text>
             <Text style={styles.tileUnit}>{speedUnit(units)}</Text>
           </View>
+          {totals.raceCount > 0 && (
+            <View style={styles.tile}>
+              <Text style={styles.tileLabel}>RACES WON</Text>
+              <Text style={styles.tileValue}>{totals.raceWins}</Text>
+              <Text style={styles.tileUnit}>of {totals.raceCount}</Text>
+            </View>
+          )}
           <Text style={styles.footnote}>
             {totals.driveCount > 0
               ? `Based on ${totals.driveCount} drive${
@@ -193,6 +205,7 @@ function WorldStats() {
   const valueText = (e: GlobalStatsEntry) => {
     if (metric === "topSpeed") return `${displaySpeedKmh(e.topSpeedKmh, units)} ${speedUnit(units)}`;
     if (metric === "avgSpeed") return `${displaySpeedKmh(e.avgSpeedKmh, units)} ${speedUnit(units)}`;
+    if (metric === "wins") return `${e.raceWins} of ${e.raceCount}`;
     return formatDistanceShort(e.distanceM, units);
   };
 
@@ -239,7 +252,9 @@ function WorldStats() {
             ))}
             <Text style={styles.footnote}>
               {data.totalRacers} racer{data.totalRacers === 1 ? "" : "s"} ranked worldwide
-              {data.minDistanceM > 0
+              {metric === "wins"
+                ? " -- head-to-head races won, out of races finished"
+                : data.minDistanceM > 0
                 ? ` -- average speed counts racers with at least ${formatDistanceShort(data.minDistanceM, units)} driven`
                 : ""}
               . Pull down to refresh.

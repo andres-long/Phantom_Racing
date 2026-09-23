@@ -654,7 +654,9 @@ export default function HomeScreen({ navigation, route }: Props) {
     setRespondingIncoming(true);
     const race = incomingRace;
     try {
-      const updated = await api.respondToRaceChallenge(race.id, user.deviceId, accept);
+      // Our position goes with the acceptance: the server lays out the road
+      // course from there, so both phones race the same stretch of road.
+      const updated = await api.respondToRaceChallenge(race.id, user.deviceId, accept, userPos);
       setIncomingRace(null);
       if (accept) {
         navigation.navigate("RaceLive", { raceId: updated.id });

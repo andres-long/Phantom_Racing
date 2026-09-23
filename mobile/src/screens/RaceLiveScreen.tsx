@@ -8,7 +8,7 @@ import { RootStackParamList, LatLng, RaceChallenge, RaceProgress } from "../type
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
-import { formatDuration } from "../utils/geo";
+import { formatDuration, cumulativeDistances, projectOntoPolyline } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -78,6 +78,13 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   // score (see raceDirections.ts).
   const startPointRef = useRef<LatLng | null>(null);
   const directionRef = useRef<"north" | "east" | "south" | "west">("north");
+  // The road course, when the backend managed to lay one out: an actual
+  // driving route the chosen way, cut to exactly the chosen distance. With
+  // one, progress is how far along that road you are (which keeps counting
+  // through its turns); without one, it falls back to the compass axis.
+  const [course, setCourse] = useState<LatLng[] | null>(null);
+  const courseRef = useRef<LatLng[] | null>(null);
+  const courseCumRef = useRef<number[]>([]);
   const presencePosRef: PresencePositionRef = useRef(null);
   usePresenceHeartbeat(presencePosRef);
 
@@ -98,6 +105,20 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     })();
   }, []);
 
+  // Show the whole course while the countdown runs, so you can see where
+  // you're going before you're going there. Once racing starts the
+  // follow-cam takes the map back over.
+  useEffect(() => {
+    if (!course || course.length < 2) return;
+    const t = setTimeout(() => {
+      mapRef.current?.fitToCoordinates(
+        course.map((p) => ({ latitude: p.lat, longitude: p.lng })),
+        { edgePadding: { top: 140, right: 60, bottom: 220, left: 60 }, animated: true }
+      );
+    }, 400);
+    return () => clearTimeout(t);
+  }, [course]);
+
   // Loads the race once on mount: target distance, opponent name, and the
   // server-issued raceStartAt both sides count down from together.
   useEffect(() => {
@@ -111,8 +132,13 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
           setLoadError("This race is no longer active.");
           return;
         }
-        targetDistanceRef.current = r.distanceM;
+        targetDistanceRef.current = r.courseDistanceM || r.distanceM;
         directionRef.current = r.directionKey || "north";
+        if (r.course && r.course.length >= 2) {
+          courseRef.current = r.course;
+          courseCumRef.current = cumulativeDistances(r.course);
+          setCourse(r.course);
+        }
         setRace(r);
         setPhase("countdown");
       } catch (e: any) {
@@ -264,12 +290,21 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       startPointRef.current = { lat: points[0].lat, lng: points[0].lng };
     }
     lastPointRef.current = pos;
-    // Never below zero: driving the wrong way just leaves you at the line
-    // rather than digging a hole you have to climb back out of.
-    distanceCoveredRef.current = Math.max(
-      0,
-      directionalProgressM(startPointRef.current, pos, directionRef.current)
-    );
+    if (courseRef.current && courseRef.current.length >= 2) {
+      // How far down the course road you've got. Kept monotonic so a GPS
+      // wobble (or a course that doubles back near itself) can't take
+      // distance back off you once you've driven it.
+      const { distanceAlongM } = projectOntoPolyline(courseRef.current, courseCumRef.current, pos);
+      distanceCoveredRef.current = Math.max(distanceCoveredRef.current, distanceAlongM);
+    } else {
+      // No course: the compass axis. Never below zero, so driving the wrong
+      // way just leaves you at the line rather than digging a hole you have
+      // to climb back out of.
+      distanceCoveredRef.current = Math.max(
+        0,
+        directionalProgressM(startPointRef.current, pos, directionRef.current)
+      );
+    }
     setDistanceCoveredM(distanceCoveredRef.current);
     setTrace((prev) => [...prev, ...points.map((p) => ({ lat: p.lat, lng: p.lng }))]);
     setElapsedMs(Date.now() - actualStartRef.current);
@@ -329,8 +364,21 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       } catch (e: any) {
         if (cancelled || finishedRef.current) return;
         if (e.message === "This race isn't currently active.") {
+          // The other racer crossed the line, finished by hand, or bailed.
+          // Either way this race is over for us too -- go and see how it
+          // ended rather than sitting here driving a decided race.
           finishedRef.current = true;
           await stopBackgroundTracking();
+          flushTopSpeed();
+          try {
+            const ended = await api.getRaceChallenge(raceId, user.deviceId);
+            if (ended.status === "finished") {
+              navigation.replace("RaceResult", { raceId });
+              return;
+            }
+          } catch {
+            // Couldn't check -- fall through to the generic message.
+          }
           Alert.alert("Race ended", `${race?.opponentDisplayName ?? "The other racer"} left the race.`, [
             { text: "OK", onPress: () => navigation.goBack() },
           ]);
@@ -404,6 +452,24 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
             : FALLBACK_REGION
         }
       >
+        {/* The course: the road to drive, and where it ends. */}
+        {course && course.length >= 2 && (
+          <>
+            <Polyline
+              coordinates={course.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+              strokeColor={colors.gold}
+              strokeWidth={7}
+            />
+            <Marker
+              coordinate={{ latitude: course[course.length - 1].lat, longitude: course[course.length - 1].lng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={styles.finishPin}>
+                <Text style={styles.finishPinText}>FINISH</Text>
+              </View>
+            </Marker>
+          </>
+        )}
         {trace.length >= 2 && (
           <Polyline
             coordinates={trace.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
@@ -440,6 +506,9 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
             {race.distanceLabel} {race.directionLabel}
           </Text>
           <Text style={styles.countdownNumber}>{countdownS && countdownS > 0 ? countdownS : "GO"}</Text>
+          <Text style={styles.countdownHint}>
+            {course ? "Follow the gold line to the finish" : "No road course -- just head " + race.directionLabel}
+          </Text>
         </View>
       )}
 
@@ -448,6 +517,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
           <Text style={styles.raceLabel} numberOfLines={1}>
             {race.distanceLabel} {race.directionLabel} VS {race.opponentDisplayName}
           </Text>
+          {course && <Text style={styles.courseHint}>Follow the gold line</Text>}
           <Text style={styles.time}>{formatDuration(elapsedMs)}</Text>
           <Text style={styles.speed}>
             {displaySpeedKmh(speedKmh, units)} {speedUnit(units)}
@@ -544,6 +614,17 @@ const styles = StyleSheet.create({
   countdownVs: { color: colors.textSecondary, fontSize: 14, letterSpacing: 1, marginBottom: 4 },
   countdownDistance: { color: colors.cyan, fontFamily: fonts.heading, fontSize: 18, letterSpacing: 2, marginBottom: 20 },
   countdownNumber: { color: colors.racePrimary, fontFamily: fonts.display, fontSize: 96 },
+  countdownHint: { color: colors.textSecondary, fontSize: 13, marginTop: 16, textAlign: "center", paddingHorizontal: 30 },
+  courseHint: { color: colors.gold, fontSize: 11, textAlign: "center", marginTop: 2, letterSpacing: 0.5 },
+  finishPin: {
+    backgroundColor: "#000000dd",
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: colors.gold,
+    paddingVertical: 3,
+    paddingHorizontal: 7,
+  },
+  finishPinText: { color: colors.gold, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
   hud: {
     position: "absolute",
     left: 20,

@@ -352,6 +352,62 @@ function lastRaceActivityMs(race) {
   return newest;
 }
 
+// A point `distanceM` away from `start` along a compass bearing. Flat-earth
+// maths, which is plenty at race distances (a few km at most).
+function destinationPoint(start, bearingDeg, distanceM) {
+  const rad = (bearingDeg * Math.PI) / 180;
+  const METERS_PER_DEG_LAT = 111320;
+  return {
+    lat: start.lat + (Math.cos(rad) * distanceM) / METERS_PER_DEG_LAT,
+    lng:
+      start.lng +
+      (Math.sin(rad) * distanceM) / (METERS_PER_DEG_LAT * Math.cos((start.lat * Math.PI) / 180)),
+  };
+}
+
+// Cuts a route down to exactly `targetM` of road, interpolating the last
+// point so the course ends on the line rather than at whatever vertex came
+// after it. Roads wind, so a route to a point `targetM` away as the crow
+// flies is always at least that long -- the leftover is what gets cut.
+function truncatePolyline(points, targetM) {
+  if (!Array.isArray(points) || points.length < 2) return { points: points || [], distanceM: 0 };
+  const out = [points[0]];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const segM = geo.haversine(points[i - 1], points[i]);
+    if (total + segM >= targetM && segM > 0) {
+      const f = (targetM - total) / segM;
+      out.push({
+        lat: points[i - 1].lat + (points[i].lat - points[i - 1].lat) * f,
+        lng: points[i - 1].lng + (points[i].lng - points[i - 1].lng) * f,
+      });
+      return { points: out, distanceM: targetM };
+    }
+    total += segM;
+    out.push(points[i]);
+  }
+  return { points: out, distanceM: total };
+}
+
+// The actual road both racers drive: a real driving route from where they
+// are, heading the way they picked, cut to exactly the distance they picked.
+// Built once when the challenge is accepted and stored on the race, so both
+// phones draw and are scored against the same course. Best-effort -- if
+// routing isn't configured or Google can't find a road that way, the race
+// simply runs without a course and falls back to measuring progress along
+// the compass axis (see raceDirections.ts on the client).
+async function buildRaceCourse(start, bearingDeg, targetM) {
+  const straightDest = destinationPoint(start, bearingDeg, targetM);
+  const route = await requestDrivingRoute(start, straightDest);
+  const cut = truncatePolyline(route.points, targetM);
+  if (cut.points.length < 2 || cut.distanceM < targetM * 0.5) return null;
+  return {
+    points: cut.points,
+    distanceM: Math.round(cut.distanceM),
+    createdAt: new Date().toISOString(),
+  };
+}
+
 // A finished racer's own side of a race, normalized for the client.
 // `completed` (did they actually cover the target distance, rather than
 // finishing early by hand) and `forfeited` (they gave up, so the other side
@@ -384,7 +440,7 @@ function raceResultView(race, result) {
 // "my" vs "opponent" rather than "from" vs "to", so the same shape works
 // whether the viewer sent or received the challenge, and the client never
 // has to juggle which field is which.
-function raceSummary(dbState, race, viewerUserId) {
+function raceSummary(dbState, race, viewerUserId, { includeCourse = false } = {}) {
   const opponentId = race.fromUserId === viewerUserId ? race.toUserId : race.fromUserId;
   const fromUser = dbState.users.find((u) => u.id === race.fromUserId);
   const toUser = dbState.users.find((u) => u.id === race.toUserId);
@@ -411,6 +467,11 @@ function raceSummary(dbState, race, viewerUserId) {
     opponentDisplayName: opponentUser?.displayName ?? "Unknown",
     myProgress: race.progress?.[viewerUserId] ?? null,
     opponentProgress: race.progress?.[opponentId] ?? null,
+    // The course is only sent where it's needed (loading the race screen).
+    // Progress polling returns this same summary every couple of seconds,
+    // and a road route is far too big to re-send on every tick.
+    courseDistanceM: race.course ? race.course.distanceM : null,
+    course: includeCourse && race.course ? race.course.points : null,
     myResult: raceResultView(race, race.results?.[viewerUserId]),
     opponentResult: raceResultView(race, race.results?.[opponentId]),
   };
@@ -981,6 +1042,31 @@ route("GET", "/api/places/details", async ({ res, query }) => {
 // Driving route + ETA between two points, used both for the initial preview
 // (before you tap "Start") and for live rerouting when you stray off the
 // planned route.
+// One driving route between two points, straight from Google. Shared by
+// the "Go To a place" route below and by race-course building, so there's
+// one place that knows the request shape and the failure cases.
+async function requestDrivingRoute(origin, destination) {
+  if (!GOOGLE_SERVER_API_KEY) throw new Error("Routing isn't configured on the server yet.");
+  const url =
+    `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.lat},${origin.lng}` +
+    `&destination=${destination.lat},${destination.lng}&mode=driving&key=${GOOGLE_SERVER_API_KEY}`;
+  const data = await httpsGetJson(url);
+  if (data.status !== "OK" || !data.routes || !data.routes.length) {
+    const err = new Error(data.error_message || `No route found (${data.status})`);
+    err.noRoute = true;
+    throw err;
+  }
+  const route0 = data.routes[0];
+  const leg = route0.legs[0];
+  return {
+    points: geo.decodePolyline(route0.overview_polyline.points),
+    distanceM: leg.distance.value,
+    durationS: leg.duration.value,
+    durationInTrafficS: leg.duration_in_traffic ? leg.duration_in_traffic.value : null,
+    endAddress: leg.end_address,
+  };
+}
+
 route("GET", "/api/directions", async ({ res, query }) => {
   const originLat = Number(query.get("originLat"));
   const originLng = Number(query.get("originLng"));
@@ -993,24 +1079,13 @@ route("GET", "/api/directions", async ({ res, query }) => {
     return sendJson(res, 500, { error: "Routing isn't configured on the server yet." });
   }
   try {
-    const url =
-      `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}` +
-      `&destination=${destLat},${destLng}&mode=driving&key=${GOOGLE_SERVER_API_KEY}`;
-    const data = await httpsGetJson(url);
-    if (data.status !== "OK" || !data.routes || !data.routes.length) {
-      return sendJson(res, 422, { error: data.error_message || `No route found (${data.status})` });
-    }
-    const route0 = data.routes[0];
-    const leg = route0.legs[0];
-    const points = geo.decodePolyline(route0.overview_polyline.points);
-    sendJson(res, 200, {
-      points,
-      distanceM: leg.distance.value,
-      durationS: leg.duration.value,
-      durationInTrafficS: leg.duration_in_traffic ? leg.duration_in_traffic.value : null,
-      endAddress: leg.end_address,
-    });
+    const route = await requestDrivingRoute(
+      { lat: originLat, lng: originLng },
+      { lat: destLat, lng: destLng }
+    );
+    sendJson(res, 200, route);
   } catch (e) {
+    if (e.noRoute) return sendJson(res, 422, { error: e.message });
     sendJson(res, 502, { error: "Couldn't reach the routing service." });
   }
 });
@@ -1119,14 +1194,14 @@ const GLOBAL_STATS_LIMIT = 50;
 // Average speed is only ranked for racers with at least this much driving,
 // so a single 100m sprint can't top the table on its own.
 const GLOBAL_AVG_MIN_DISTANCE_M = 1000;
-const GLOBAL_STATS_METRICS = ["topSpeed", "distance", "avgSpeed"];
+const GLOBAL_STATS_METRICS = ["topSpeed", "distance", "avgSpeed", "wins"];
 
 function computeGlobalStats(state) {
   const byUser = new Map();
   const add = (userId, distanceM, durationMs, maxSpeedKmh) => {
     let s = byUser.get(userId);
     if (!s) {
-      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0 };
+      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0, raceCount: 0, raceWins: 0 };
       byUser.set(userId, s);
     }
     if (Number.isFinite(distanceM) && distanceM > 0) s.distanceM += distanceM;
@@ -1141,7 +1216,15 @@ function computeGlobalStats(state) {
     add(t.userId, t.distanceM, t.durationMs, t.maxSpeedKmh ?? 0);
   }
   // Live head-to-head races count too -- including forfeited ones, since
-  // the driving happened either way.
+  // the driving happened either way -- and each one's winner picks up a win.
+  const ensure = (userId) => {
+    let s = byUser.get(userId);
+    if (!s) {
+      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0, raceCount: 0, raceWins: 0 };
+      byUser.set(userId, s);
+    }
+    return s;
+  };
   for (const race of state.races || []) {
     if (race.status !== "finished") continue;
     for (const userId of [race.fromUserId, race.toUserId]) {
@@ -1150,6 +1233,14 @@ function computeGlobalStats(state) {
       if (isImplausibleRun(result.avgSpeedKmh, result.maxSpeedKmh)) continue;
       add(userId, result.distanceM ?? 0, result.durationMs, result.maxSpeedKmh);
     }
+    const mine = raceResultView(race, race.results?.[race.fromUserId]);
+    const theirs = raceResultView(race, race.results?.[race.toUserId]);
+    if (!mine || !theirs) continue;
+    ensure(race.fromUserId).raceCount += 1;
+    ensure(race.toUserId).raceCount += 1;
+    const fromWon = raceWinnerIsMine(mine, theirs);
+    if (fromWon === true) ensure(race.fromUserId).raceWins += 1;
+    else if (fromWon === false) ensure(race.toUserId).raceWins += 1;
   }
 
   // A personal best set while just driving around with the app open counts
@@ -1159,11 +1250,7 @@ function computeGlobalStats(state) {
   for (const user of state.users) {
     const passive = user.topSpeedKmh ?? 0;
     if (!(passive > 0)) continue;
-    let s = byUser.get(user.id);
-    if (!s) {
-      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0 };
-      byUser.set(user.id, s);
-    }
+    const s = ensure(user.id);
     if (passive > s.topSpeedKmh) s.topSpeedKmh = passive;
   }
 
@@ -1178,6 +1265,8 @@ function computeGlobalStats(state) {
       distanceM: Math.round(s.distanceM),
       avgSpeedKmh: s.durationMs > 0 ? Math.round((s.distanceM / 1000 / (s.durationMs / 3_600_000)) * 10) / 10 : 0,
       driveCount: s.driveCount,
+      raceCount: s.raceCount,
+      raceWins: s.raceWins,
     });
   }
   return entries;
@@ -1191,7 +1280,13 @@ route("GET", "/api/stats/global", async ({ res, query }) => {
   const me = deviceId ? findUserByDevice(state, deviceId) : null;
 
   const valueOf = (e) =>
-    metric === "topSpeed" ? e.topSpeedKmh : metric === "distance" ? e.distanceM : e.avgSpeedKmh;
+    metric === "topSpeed"
+      ? e.topSpeedKmh
+      : metric === "distance"
+      ? e.distanceM
+      : metric === "wins"
+      ? e.raceWins
+      : e.avgSpeedKmh;
   const eligible = computeGlobalStats(state)
     .filter((e) => (metric === "avgSpeed" ? e.distanceM >= GLOBAL_AVG_MIN_DISTANCE_M : true))
     .filter((e) => valueOf(e) > 0)
@@ -1367,6 +1462,7 @@ route("GET", "/api/races/incoming", async ({ res, query }) => {
   );
 });
 
+// Loading the race screen -- the one place that gets the full course.
 route("GET", "/api/races/:id", async ({ res, params, query }) => {
   const deviceId = (query.get("deviceId") || "").trim();
   const state = await db.load();
@@ -1405,11 +1501,26 @@ route("POST", "/api/races/:id/respond", async ({ res, params, body }) => {
   if (body.accept) {
     race.status = "accepted";
     race.raceStartAt = new Date(Date.now() + RACE_COUNTDOWN_MS).toISOString();
+    // Lay out the road course from where the accepting racer is standing --
+    // the two of you are side by side, so either position gives the same
+    // road. Failures are swallowed: no course just means the race is scored
+    // on the compass axis as before, which is better than refusing to start.
+    const lat = Number(body.lat);
+    const lng = Number(body.lng);
+    const dist = RACE_DISTANCES[race.distanceKey];
+    const dirKey = RACE_DIRECTIONS[race.directionKey] ? race.directionKey : DEFAULT_RACE_DIRECTION;
+    if (Number.isFinite(lat) && Number.isFinite(lng) && dist) {
+      try {
+        race.course = await buildRaceCourse({ lat, lng }, RACE_DIRECTIONS[dirKey].bearing, dist.meters);
+      } catch (e) {
+        race.course = null;
+      }
+    }
   } else {
     race.status = "declined";
   }
   await db.save(state);
-  sendJson(res, 200, raceSummary(state, race, me.id));
+  sendJson(res, 200, raceSummary(state, race, me.id, { includeCourse: true }));
 });
 
 // Live progress update during a race (posted every couple of seconds by
@@ -1446,6 +1557,23 @@ route("POST", "/api/races/:id/progress", async ({ res, params, body }) => {
   await db.save(state);
   sendJson(res, 200, raceSummary(state, race, me.id));
 });
+
+// When a race ends, the racer who didn't post a result still gets one,
+// banked from their last live progress -- nobody has to keep driving to
+// collect a win, and nobody is left sitting on a race screen that will
+// never end. Used by finish and by forfeit alike.
+function bankProgressAsResult(race, userId) {
+  if (race.results[userId]) return;
+  const p = race.progress?.[userId];
+  race.results[userId] = buildRaceResult({
+    durationMs: p ? p.elapsedMs : 0,
+    distanceM: p ? p.distanceM : 0,
+    avgSpeedKmh: p && p.elapsedMs > 0 ? p.distanceM / 1000 / (p.elapsedMs / 3600000) : 0,
+    maxSpeedKmh: p ? p.speedKmh : 0,
+    completed: false,
+    forfeited: false,
+  });
+}
 
 // One racer's stored result. Speeds are clamped/validated here rather than
 // at each call site so a finish, an early finish and a forfeit all record
@@ -1498,10 +1626,14 @@ route("POST", "/api/races/:id/finish", async ({ res, params, body }) => {
     forfeited: false,
   });
 
-  if (race.results[race.fromUserId] && race.results[race.toUserId]) {
-    race.status = "finished";
-    race.finishedAt = new Date().toISOString();
-  }
+  // A race is over the moment someone crosses the line (or ends it by
+  // hand): the other racer's progress is banked right there. Previously
+  // they were left driving a race that had already been decided, with the
+  // result screen waiting on a finish that might never come.
+  const opponentId = race.fromUserId === me.id ? race.toUserId : race.fromUserId;
+  bankProgressAsResult(race, opponentId);
+  race.status = "finished";
+  race.finishedAt = new Date().toISOString();
   await db.save(state);
   sendJson(res, 200, raceSummary(state, race, me.id));
 });
@@ -1534,20 +1666,7 @@ route("POST", "/api/races/:id/forfeit", async ({ res, params, body }) => {
     completed: false,
     forfeited: true,
   });
-  // The opponent doesn't have to keep driving to collect the win -- if they
-  // haven't finished yet, their live progress is banked as their result.
-  if (!race.results[opponentId]) {
-    const p = race.progress?.[opponentId];
-    race.results[opponentId] = buildRaceResult({
-      durationMs: p ? p.elapsedMs : 0,
-      distanceM: p ? p.distanceM : 0,
-      avgSpeedKmh:
-        p && p.elapsedMs > 0 ? p.distanceM / 1000 / (p.elapsedMs / 3600000) : 0,
-      maxSpeedKmh: p ? p.speedKmh : 0,
-      completed: false,
-      forfeited: false,
-    });
-  }
+  bankProgressAsResult(race, opponentId);
   race.status = "finished";
   race.finishedAt = new Date().toISOString();
   await db.save(state);

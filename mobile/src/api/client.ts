@@ -266,10 +266,12 @@ export const api = {
   getRaceChallenge: (raceId: string, deviceId: string) =>
     poll<RaceChallenge>(`/api/races/${raceId}?deviceId=${encodeURIComponent(deviceId)}`),
 
-  respondToRaceChallenge: (raceId: string, deviceId: string, accept: boolean) =>
+  // `position` is where the accepting racer is standing -- the server lays
+  // the road course out from there, so both phones race the same stretch.
+  respondToRaceChallenge: (raceId: string, deviceId: string, accept: boolean, position?: LatLng | null) =>
     request<RaceChallenge>(`/api/races/${raceId}/respond`, {
       method: "POST",
-      body: JSON.stringify({ deviceId, accept }),
+      body: JSON.stringify({ deviceId, accept, lat: position?.lat, lng: position?.lng }),
     }),
 
   postRaceProgress: (raceId: string, deviceId: string, distanceM: number, elapsedMs: number, speedKmh: number) =>

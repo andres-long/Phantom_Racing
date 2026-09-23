@@ -143,6 +143,14 @@ export type RaceChallenge = {
   directionKey: RaceDirectionKey;
   directionLabel: string;
   directionBearing: number;
+  // The road course both racers drive: a real driving route from where the
+  // race was accepted, the chosen way, cut to exactly the chosen distance.
+  // `course` only comes back when loading the race (it's far too big to
+  // re-send on every progress poll); `courseDistanceM` is null when routing
+  // couldn't lay one out, in which case the race falls back to measuring
+  // progress along the compass axis.
+  courseDistanceM: number | null;
+  course: LatLng[] | null;
   status: RaceStatus;
   createdAt: string;
   raceStartAt: string | null;
@@ -227,7 +235,7 @@ export type TopSpeedResponse = { topSpeedKmh: number; topSpeedAt: string | null 
 
 // ---- Worldwide stats leaderboard (Stats screen's WORLD tab) ------------
 
-export type GlobalStatsMetric = "topSpeed" | "distance" | "avgSpeed";
+export type GlobalStatsMetric = "topSpeed" | "distance" | "avgSpeed" | "wins";
 
 export type GlobalStatsEntry = {
   rank: number;
@@ -237,6 +245,9 @@ export type GlobalStatsEntry = {
   distanceM: number;
   avgSpeedKmh: number;
   driveCount: number;
+  // Head-to-head record: races finished, and how many of them they took.
+  raceCount: number;
+  raceWins: number;
 };
 
 export type GlobalStatsResponse = {

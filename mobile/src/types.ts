@@ -162,6 +162,10 @@ export type RaceChallenge = {
   opponentProgress: RaceProgress | null;
   myResult: RaceResult | null;
   opponentResult: RaceResult | null;
+  // The server's clock when it answered (ms since epoch). The race screen
+  // uses it to count down on server time rather than each phone's own
+  // clock, which can be seconds apart.
+  serverNow?: number;
 };
 
 // ---- Proximity voice (real-time audio with whoever's nearby) ----------
@@ -275,7 +279,9 @@ export type RootStackParamList = {
   Welcome: undefined;
   Disclaimer: undefined;
   Username: undefined;
-  Home: { busy?: BusyDrive } | undefined;
+  // `challenge`: a racer's deviceId to open straight into the race picker
+  // for -- how you race someone you spotted while recording.
+  Home: { busy?: BusyDrive; challenge?: string } | undefined;
   AllSegments: undefined;
   CreateSegment: undefined;
   RecordRun: { segmentId: string; autoStart?: boolean };

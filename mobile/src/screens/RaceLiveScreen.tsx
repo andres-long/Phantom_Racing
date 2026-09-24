@@ -24,6 +24,7 @@ import {
 import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
 import { directionalProgressM } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
+import { useStaleSpeedReset } from "../utils/speed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RaceLive">;
 
@@ -74,6 +75,14 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   const lastPointRef = useRef<LatLng | null>(null);
   const maxSpeedRef = useRef(0);
   const actualStartRef = useRef<number>(0);
+  // How far this phone's clock is from the server's (server - phone, ms).
+  // Two phones' clocks can easily be a couple of seconds apart, and the
+  // countdown used to run on each phone's own clock -- so the two racers
+  // saw GO about two seconds apart. Everything race-timing now runs on the
+  // server's clock instead (see sampleClockOffset).
+  const clockOffsetRef = useRef(0);
+  const bestRttRef = useRef(Number.POSITIVE_INFINITY);
+  const serverNow = () => Date.now() + clockOffsetRef.current;
   const finishedRef = useRef(false);
   const targetDistanceRef = useRef(0);
   // Where we were when the countdown hit zero, and which way this race
@@ -91,6 +100,11 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   const courseCumRef = useRef<number[]>([]);
   const presencePosRef: PresencePositionRef = useRef(null);
   usePresenceHeartbeat(presencePosRef);
+  // Speed back to 0 once fixes stop arriving (you've stopped moving).
+  const markFix = useStaleSpeedReset(() => {
+    setSpeedKmh(0);
+    speedKmhRef.current = 0;
+  });
 
   // A one-off fix so the map has somewhere to center before tracking starts
   // (mirrors RecordRunScreen's own pre-start fix) -- best-effort, the
@@ -123,6 +137,17 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [course]);
 
+  // One clock sample: the server's time at the middle of a round trip vs
+  // ours. The quickest round trip gives the tightest estimate, so only a
+  // faster sample replaces an earlier one.
+  const sampleClockOffset = (serverNowMs: number | undefined, sentAt: number, receivedAt: number) => {
+    if (!serverNowMs || !Number.isFinite(serverNowMs)) return;
+    const rtt = receivedAt - sentAt;
+    if (rtt >= bestRttRef.current) return;
+    bestRttRef.current = rtt;
+    clockOffsetRef.current = serverNowMs - (sentAt + receivedAt) / 2;
+  };
+
   // Loads the race once on mount: target distance, opponent name, and the
   // server-issued raceStartAt both sides count down from together.
   useEffect(() => {
@@ -130,7 +155,9 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     (async () => {
       if (!user) return;
       try {
+        const sentAt = Date.now();
         const r = await api.getRaceChallenge(raceId, user.deviceId);
+        sampleClockOffset(r.serverNow, sentAt, Date.now());
         if (cancelled) return;
         if (r.status !== "accepted" && r.status !== "finished") {
           setLoadError("This race is no longer active.");
@@ -145,6 +172,17 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
         }
         setRace(r);
         setPhase("countdown");
+        // A few more clock samples during the countdown -- a single request
+        // can be slowed by a busy network, and the fastest one wins.
+        for (let i = 0; i < 3 && !cancelled; i++) {
+          try {
+            const sent = Date.now();
+            const again = await api.getRaceChallenge(raceId, user.deviceId);
+            sampleClockOffset(again.serverNow, sent, Date.now());
+          } catch {
+            // Keep whatever estimate we already have.
+          }
+        }
       } catch (e: any) {
         if (!cancelled) setLoadError(e.message || "Couldn't load the race.");
       }
@@ -165,11 +203,15 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     let t: ReturnType<typeof setInterval> | null = null;
 
     const tick = () => {
-      const msLeft = startAt - Date.now();
+      // On the server's clock, so both phones hit GO together.
+      const msLeft = startAt - serverNow();
       if (msLeft <= 0) {
         if (cancelled) return;
         setCountdownS(0);
-        actualStartRef.current = Date.now();
+        // The start instant itself (in this phone's clock), not whenever
+        // this 200ms tick happened to notice it -- both racers' times are
+        // measured from the same moment.
+        actualStartRef.current = startAt - clockOffsetRef.current;
         setPhase("racing");
         if (t) clearInterval(t);
         return;
@@ -203,7 +245,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     if (finishedRef.current || !user) return;
     finishedRef.current = true;
     setPhase("ending");
-    await stopBackgroundTracking();
+    await stopBackgroundTracking("race");
     flushTopSpeed();
     const durationMs = Math.max(1, Date.now() - actualStartRef.current);
     const avgSpeedKmh = finalDistanceM / 1000 / (durationMs / 3600000);
@@ -247,7 +289,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     if (finishedRef.current || !user) return;
     finishedRef.current = true;
     setPhase("ending");
-    await stopBackgroundTracking();
+    await stopBackgroundTracking("race");
     flushTopSpeed();
     const { durationMs, distanceM, avgSpeedKmh, maxSpeedKmh } = raceSoFar();
     try {
@@ -288,6 +330,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     );
     setSpeedKmh(last.speedKmh);
     speedKmhRef.current = last.speedKmh;
+    markFix();
     recordSpeed(last.speedKmh);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
@@ -339,10 +382,8 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       lastPointRef.current = null;
       startPointRef.current = null;
       distanceCoveredRef.current = 0;
-      setBackgroundLocationListener(handleLocationPoints);
-      await startBackgroundTracking(
-        `Racing ${race?.opponentDisplayName ?? "another driver"} -- tap to return to Phantom Racing.`
-      );
+      setBackgroundLocationListener(handleLocationPoints, "race");
+      await startBackgroundTracking(`Racing ${race?.opponentDisplayName ?? "another driver"} -- tap to return to Phantom Racing.`, "race");
     })();
     return () => {
       cancelled = true;
@@ -376,7 +417,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
           // Either way this race is over for us too -- go and see how it
           // ended rather than sitting here driving a decided race.
           finishedRef.current = true;
-          await stopBackgroundTracking();
+          await stopBackgroundTracking("race");
           flushTopSpeed();
           try {
             const ended = await api.getRaceChallenge(raceId, user.deviceId);
@@ -405,7 +446,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   // away some other way), never leave the background location task running.
   useEffect(() => {
     return () => {
-      stopBackgroundTracking();
+      stopBackgroundTracking("race");
     };
   }, []);
 

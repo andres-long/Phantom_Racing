@@ -16,8 +16,15 @@
 // (RecordRunScreen / CreateSegmentScreen / GoRaceScreen) has registered via
 // setBackgroundLocationListener, and the screen folds them into its own
 // trace state exactly like it used to handle each watchPositionAsync tick.
+//
+// Several screens can now track at once -- e.g. a live race started while a
+// Go To drive or a segment recording keeps running underneath -- so each
+// caller names itself (`owner`). Every owner gets every point, and the
+// native task only stops once the last owner has stopped; previously the
+// race's own "stop" would have killed the recording underneath it.
 import * as TaskManager from "expo-task-manager";
 import * as Location from "expo-location";
+import { cleanSpeedKmh } from "./utils/speed";
 
 export const BACKGROUND_LOCATION_TASK = "nfs-background-location-task";
 
@@ -29,11 +36,15 @@ export type BackgroundLocationPoint = {
   speedKmh: number;
 };
 
-type Listener = (points: BackgroundLocationPoint[]) => void;
-let activeListener: Listener | null = null;
+export type TrackingOwner = "run" | "segment" | "trip" | "race";
 
-export function setBackgroundLocationListener(fn: Listener | null) {
-  activeListener = fn;
+type Listener = (points: BackgroundLocationPoint[]) => void;
+const listeners = new Map<TrackingOwner, Listener>();
+const activeOwners = new Set<TrackingOwner>();
+
+export function setBackgroundLocationListener(fn: Listener | null, owner: TrackingOwner) {
+  if (fn) listeners.set(owner, fn);
+  else listeners.delete(owner);
 }
 
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
@@ -50,10 +61,17 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
     lng: loc.coords.longitude,
     t: loc.timestamp,
     heading: loc.coords.heading != null && loc.coords.heading >= 0 ? loc.coords.heading : null,
-    speedKmh: Math.max(0, (loc.coords.speed ?? 0) * 3.6),
+    // Filtered so a phone sitting still reads 0, not GPS drift.
+    speedKmh: cleanSpeedKmh(loc.coords.speed, loc.coords.accuracy),
   }));
 
-  activeListener?.(points);
+  for (const listener of listeners.values()) {
+    try {
+      listener(points);
+    } catch (e) {
+      console.warn("Background location listener failed:", e);
+    }
+  }
 });
 
 /**
@@ -73,7 +91,8 @@ export async function requestBackgroundLocationPermission(): Promise<boolean> {
  * task. Delivers updates to whatever listener is currently registered via
  * setBackgroundLocationListener, whether the app is foregrounded or not.
  */
-export async function startBackgroundTracking(notificationBody: string) {
+export async function startBackgroundTracking(notificationBody: string, owner: TrackingOwner) {
+  activeOwners.add(owner);
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(
     () => false
   );
@@ -92,12 +111,18 @@ export async function startBackgroundTracking(notificationBody: string) {
   });
 }
 
-export async function stopBackgroundTracking() {
+// Stops this owner's tracking. Safe to call more than once (screens call it
+// on finish and again on unmount). The GPS task itself keeps running while
+// any other owner still needs it.
+export async function stopBackgroundTracking(owner: TrackingOwner) {
+  activeOwners.delete(owner);
+  listeners.delete(owner);
+  if (activeOwners.size > 0) return;
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(
     () => false
   );
-  if (alreadyStarted) {
+  // Re-check: another owner may have started while we were awaiting.
+  if (alreadyStarted && activeOwners.size === 0) {
     await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
   }
-  activeListener = null;
 }

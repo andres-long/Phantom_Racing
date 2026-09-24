@@ -3,8 +3,9 @@ import { View, Text, StyleSheet, Pressable, Alert, ActivityIndicator } from "rea
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useIsFocused } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList, SegmentSummary, GhostProfileResponse, LatLng } from "../types";
+import { RootStackParamList, SegmentSummary, GhostProfileResponse, LatLng, PresenceUser } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import {
@@ -28,6 +29,10 @@ import {
   stopBackgroundTracking,
 } from "../backgroundLocation";
 import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
+import { useNearbyRacers } from "../hooks/useNearbyRacers";
+import { useIncomingRace } from "../hooks/useIncomingRace";
+import { RacerMarkers, IncomingRaceCard } from "../components/RacersOnTheRoad";
+import { useStaleSpeedReset } from "../utils/speed";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
@@ -66,6 +71,33 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const presencePosRef: PresencePositionRef = useRef(null);
   usePresenceHeartbeat(presencePosRef);
 
+  // Other racers stay on the map while you drive, and you can race them --
+  // either direction. A race started from here runs on top of this screen;
+  // this recording keeps going underneath (see backgroundLocation.ts).
+  // Only while this screen is the one on show -- a race or the map pushed
+  // on top has its own.
+  const isFocused = useIsFocused();
+  const nearbyRacers = useNearbyRacers(presencePosRef, recording && isFocused);
+  const { incoming, responding, respond } = useIncomingRace(recording && isFocused);
+  // Speed readout back to 0 once fixes stop arriving -- they only come when
+  // you've moved a few metres, so stopping used to freeze the last speed.
+  const markFix = useStaleSpeedReset(() => setSpeedKmh(0));
+
+  const challengeRacer = (racer: PresenceUser) => {
+    Alert.alert(`Race ${racer.displayName}?`, "Your recording keeps going while you race.", [
+      { text: "Not now", style: "cancel" },
+      {
+        text: "Race",
+        onPress: () => navigation.push("Home", { busy: { kind: "run" as const, label: `Timing your run on ${segment?.name ?? "this track"}` }, challenge: racer.deviceId }),
+      },
+    ]);
+  };
+
+  const acceptIncoming = async () => {
+    const race = await respond(true, presencePosRef.current?.coords ?? null);
+    if (race) navigation.push("RaceLive", { raceId: race.id });
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -89,7 +121,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
       }
     })();
     return () => {
-      stopBackgroundTracking();
+      stopBackgroundTracking("run");
     };
   }, [segmentId]);
 
@@ -117,7 +149,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const finishRun = async (finalTrace: TracePoint[]) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    await stopBackgroundTracking();
+    await stopBackgroundTracking("run");
     setRecording(false);
 
     if (!user || !segment) {
@@ -160,6 +192,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
       500
     );
     setSpeedKmh(last.speedKmh);
+    markFix();
     recordSpeed(last.speedKmh);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
@@ -212,8 +245,8 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     startTimeRef.current = Date.now();
     setRecording(true);
 
-    setBackgroundLocationListener(handleLocationPoints);
-    await startBackgroundTracking(`Timing your run on ${segment.name}. Tap to return to Phantom Racing.`);
+    setBackgroundLocationListener(handleLocationPoints, "run");
+    await startBackgroundTracking(`Timing your run on ${segment.name}. Tap to return to Phantom Racing.`, "run");
   };
 
   // Auto-detected races (jumped here straight from the map because you were
@@ -249,7 +282,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           style: "destructive",
           onPress: () => {
             finishedRef.current = true;
-            stopBackgroundTracking();
+            stopBackgroundTracking("run");
             navigation.goBack();
           },
         },
@@ -309,6 +342,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
             pinColor={colors.gold}
           />
         )}
+        <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
 
       <Pressable style={[styles.cancelButton, { top: insets.top + 10 }]} onPress={onCancel} hitSlop={10}>
@@ -351,6 +385,16 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         variant={recording ? "outline" : "primary"}
         style={styles.button}
       />
+
+      {incoming && (
+        <IncomingRaceCard
+          race={incoming}
+          busy={responding}
+          onAccept={acceptIncoming}
+          onDecline={() => respond(false, null)}
+          style={{ bottom: 110 }}
+        />
+      )}
     </View>
   );
 }

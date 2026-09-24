@@ -27,6 +27,22 @@ export default function RaceResultScreen({ route, navigation }: Props) {
   const { user, units } = useUser();
 
   const [race, setRace] = useState<RaceChallenge | null>(null);
+
+  // If this race was run on top of a drive that's still recording (a Go To
+  // trip, a track run, a new track), go back to that drive -- jumping
+  // straight to the map would pop it off the stack and throw it away.
+  const DRIVE_SCREENS = ["RecordRun", "GoRace", "CreateSegment"];
+  const drivingUnderneath = (() => {
+    const state = navigation.getState();
+    for (let i = state.index - 1; i >= 0; i--) {
+      if (DRIVE_SCREENS.includes(state.routes[i].name)) return state.index - i;
+    }
+    return 0;
+  })();
+  const leave = () => {
+    if (drivingUnderneath > 0) navigation.pop(drivingUnderneath);
+    else navigation.popToTop();
+  };
   const [error, setError] = useState<string | null>(null);
   const pollingRef = useRef(true);
 
@@ -62,7 +78,7 @@ export default function RaceResultScreen({ route, navigation }: Props) {
       <View style={styles.container}>
         <GridBackground />
         <Text style={styles.errorText}>{error}</Text>
-        <NeonButton label="BACK TO MAP" onPress={() => navigation.popToTop()} style={styles.button} />
+        <NeonButton label="BACK TO MAP" onPress={leave} style={styles.button} />
       </View>
     );
   }
@@ -142,7 +158,11 @@ export default function RaceResultScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      <NeonButton label="BACK TO MAP" onPress={() => navigation.popToTop()} style={styles.button} />
+      <NeonButton
+        label={drivingUnderneath > 0 ? "BACK TO YOUR DRIVE" : "BACK TO MAP"}
+        onPress={leave}
+        style={styles.button}
+      />
     </View>
   );
 }

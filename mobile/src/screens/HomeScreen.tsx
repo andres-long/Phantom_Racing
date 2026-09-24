@@ -26,6 +26,7 @@ import { tronMapStyle } from "../mapStyle";
 import { RACE_DISTANCES } from "../raceDistances";
 import { RACE_DIRECTIONS } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
+import { cleanSpeedKmh, useStaleSpeedReset } from "../utils/speed";
 import NeonButton from "../components/NeonButton";
 import VehicleMarker from "../components/VehicleMarker";
 
@@ -88,6 +89,13 @@ export default function HomeScreen({ navigation, route }: Props) {
   const busy: BusyDrive | null = route.params?.busy ?? null;
   const busyRef = useRef<BusyDrive | null>(null);
   busyRef.current = busy;
+  // You can race someone while a recording runs underneath (the race runs
+  // on top of it, and it keeps recording) -- just not while already racing.
+  const canRace = !busy || busy.kind !== "race";
+  // Opened from a recording screen by tapping a racer there: go straight
+  // to picking a distance against them once they show up on this map.
+  const challengeDeviceId = route.params?.challenge ?? null;
+  const challengeHandledRef = useRef(false);
   const { reportPosition, connectedPeers, talking, setTalking, micReady, micBlocked, retryMic } =
     useProximityVoiceContext();
   const [blocking, setBlocking] = useState(false);
@@ -140,6 +148,12 @@ export default function HomeScreen({ navigation, route }: Props) {
   // roads); raceStep drives what the selected-player card shows next.
   const [selectedUser, setSelectedUser] = useState<PresenceUser | null>(null);
   const [raceStep, setRaceStep] = useState<"closed" | "distance" | "direction" | "waiting">("closed");
+  // Speed readout back to 0 when fixes stop arriving -- the watcher only
+  // reports after you've moved a few metres, so stopping froze the last
+  // speed on screen. Held in a ref for the focus effect's GPS callback.
+  const markFix = useStaleSpeedReset(() => setSpeedKmh(0));
+  const markFixRef = useRef(markFix);
+  markFixRef.current = markFix;
   // Distance picked in the first step, held while they choose a direction.
   const [pendingDistanceKey, setPendingDistanceKey] = useState<RaceDistanceKey | null>(null);
   const [creatingChallenge, setCreatingChallenge] = useState(false);
@@ -306,8 +320,10 @@ export default function HomeScreen({ navigation, route }: Props) {
         }
 
         if (!live) return;
-        const currentSpeedKmh = Math.max(0, (loc.coords.speed ?? 0) * 3.6);
+        // 0 when you're actually stopped, not GPS drift.
+        const currentSpeedKmh = cleanSpeedKmh(loc.coords.speed, loc.coords.accuracy);
         setSpeedKmh(currentSpeedKmh);
+        markFixRef.current();
         // Your top speed counts whenever the app is open, not just during a
         // recorded drive -- this is the "just driving around" case.
         recordSpeed(currentSpeedKmh);
@@ -550,6 +566,20 @@ export default function HomeScreen({ navigation, route }: Props) {
       400
     );
   };
+
+  // Arrived here from a recording screen by tapping a racer: once they're
+  // on this map, open their card straight at the distance picker.
+  useEffect(() => {
+    if (!challengeDeviceId || challengeHandledRef.current || !canRace) return;
+    const racer = otherUsers.find((u) => u.deviceId === challengeDeviceId);
+    if (!racer) return;
+    challengeHandledRef.current = true;
+    setSelectedId(null);
+    setPickingRacer(false);
+    setRaceError(null);
+    setSelectedUser(racer);
+    setRaceStep("distance");
+  }, [challengeDeviceId, otherUsers, canRace]);
 
   const formatDistance = (m: number) => `${formatDistanceShort(m, units)} away`;
 
@@ -1037,7 +1067,7 @@ export default function HomeScreen({ navigation, route }: Props) {
               {raceError && <Text style={styles.raceErrorText}>{raceError}</Text>}
               {/* The open race is almost always one somebody walked away
                   from -- offer to clear it instead of dead-ending here. */}
-              {raceError?.includes("already an open race") && !busy && (
+              {raceError?.includes("already an open race") && canRace && (
                 <Pressable onPress={clearStuckRaceAndRetry} disabled={creatingChallenge} hitSlop={6}>
                   <Text style={styles.raceErrorAction}>
                     {creatingChallenge ? "CLEARING..." : "CLEAR IT AND RACE AGAIN >"}
@@ -1045,10 +1075,10 @@ export default function HomeScreen({ navigation, route }: Props) {
                 </Pressable>
               )}
               <Text style={styles.cardMeta}>
-                {busy ? "Nearby right now -- finish what you're doing first to race them" : "Nearby right now"}
+                {canRace ? "Nearby right now" : "Nearby right now -- finish this race first to race them"}
               </Text>
               <View style={styles.cardActions}>
-                {!busy && (
+                {canRace && (
                   <NeonButton
                     label="RACE"
                     onPress={() => {
@@ -1124,7 +1154,7 @@ export default function HomeScreen({ navigation, route }: Props) {
 
       {/* Not while you're already recording or racing something else --
           accepting would start a second drive on top of the first. */}
-      {incomingRace && !busy && (
+      {incomingRace && canRace && (
         <View style={[styles.incomingCard, { top: insets.top + 104 }]}>
           <Text style={styles.cardTitle}>Race request!</Text>
           <Text style={styles.cardMeta}>

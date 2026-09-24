@@ -64,7 +64,9 @@ const RACE_ABANDON_TIMEOUT_MS = 15 * 60 * 1000;
 // Gap between "accepted" and the actual start, so both phones can count down
 // from the same server-issued timestamp rather than starting the instant
 // each individual device happens to receive the accept.
-const RACE_COUNTDOWN_MS = 5000;
+// Long enough for the challenger's phone to notice the accept (it polls
+// every 1.5s), open the race and sync its clock to the server's before GO.
+const RACE_COUNTDOWN_MS = 8000;
 
 // How close (meters) two racers have to be for proximity voice to connect
 // them -- deliberately much tighter than presence's map-viewport query or a
@@ -474,6 +476,9 @@ function raceSummary(dbState, race, viewerUserId, { includeCourse = false } = {}
     course: includeCourse && race.course ? race.course.points : null,
     myResult: raceResultView(race, race.results?.[viewerUserId]),
     opponentResult: raceResultView(race, race.results?.[opponentId]),
+    // Lets each phone measure how far its own clock is from this one, so
+    // both count down to raceStartAt on the same clock.
+    serverNow: Date.now(),
   };
 }
 

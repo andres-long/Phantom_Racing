@@ -3,8 +3,9 @@ import { View, Text, StyleSheet, Pressable, Alert } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useIsFocused } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList, LatLng } from "../types";
+import { RootStackParamList, LatLng, PresenceUser } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { cumulativeDistances, projectOntoPolyline, haversine, formatDuration } from "../utils/geo";
@@ -21,6 +22,10 @@ import {
   stopBackgroundTracking,
 } from "../backgroundLocation";
 import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceHeartbeat";
+import { useNearbyRacers } from "../hooks/useNearbyRacers";
+import { useIncomingRace } from "../hooks/useIncomingRace";
+import { RacerMarkers, IncomingRaceCard } from "../components/RacersOnTheRoad";
+import { useStaleSpeedReset } from "../utils/speed";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "GoRace">;
@@ -81,6 +86,33 @@ export default function GoRaceScreen({ route, navigation }: Props) {
   const presencePosRef: PresencePositionRef = useRef(null);
   usePresenceHeartbeat(presencePosRef);
 
+  // Other racers stay on the map while you drive, and you can race them --
+  // either direction. A race started from here runs on top of this screen;
+  // this recording keeps going underneath (see backgroundLocation.ts).
+  // Only while this screen is the one on show -- a race or the map pushed
+  // on top has its own.
+  const isFocused = useIsFocused();
+  const nearbyRacers = useNearbyRacers(presencePosRef, !submitting && isFocused);
+  const { incoming, responding, respond } = useIncomingRace(!submitting && isFocused);
+  // Speed readout back to 0 once fixes stop arriving -- they only come when
+  // you've moved a few metres, so stopping used to freeze the last speed.
+  const markFix = useStaleSpeedReset(() => setSpeedKmh(0));
+
+  const challengeRacer = (racer: PresenceUser) => {
+    Alert.alert(`Race ${racer.displayName}?`, "Your recording keeps going while you race.", [
+      { text: "Not now", style: "cancel" },
+      {
+        text: "Race",
+        onPress: () => navigation.push("Home", { busy: { kind: "trip" as const, label: `Driving to ${destinationName}` }, challenge: racer.deviceId }),
+      },
+    ]);
+  };
+
+  const acceptIncoming = async () => {
+    const race = await respond(true, presencePosRef.current?.coords ?? null);
+    if (race) navigation.push("RaceLive", { raceId: race.id });
+  };
+
   useEffect(() => {
     plannedRouteRef.current = plannedRoute;
     cumDistRef.current = cumulativeDistances(plannedRoute);
@@ -89,7 +121,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
   const finishTrip = async (finalTrace: TracePoint[]) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    await stopBackgroundTracking();
+    await stopBackgroundTracking("trip");
 
     if (!user) {
       Alert.alert("Not connected", "Lost connection to the server -- your trip wasn't saved.", [
@@ -151,6 +183,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
       500
     );
     setSpeedKmh(last.speedKmh);
+    markFix();
     recordSpeed(last.speedKmh);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
@@ -210,12 +243,12 @@ export default function GoRaceScreen({ route, navigation }: Props) {
       }
       if (cancelled) return;
       startTimeRef.current = Date.now();
-      setBackgroundLocationListener(handleLocationPoints);
-      await startBackgroundTracking(`Driving to ${destinationName}. Tap to return to Phantom Racing.`);
+      setBackgroundLocationListener(handleLocationPoints, "trip");
+      await startBackgroundTracking(`Driving to ${destinationName}. Tap to return to Phantom Racing.`, "trip");
     })();
     return () => {
       cancelled = true;
-      stopBackgroundTracking();
+      stopBackgroundTracking("trip");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -249,7 +282,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         style: "destructive",
         onPress: () => {
           finishedRef.current = true;
-          stopBackgroundTracking();
+          stopBackgroundTracking("trip");
           navigation.goBack();
         },
       },
@@ -296,6 +329,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
             <VehicleMarker vehicleStyle={vehicleStyle} />
           </Marker>
         )}
+        <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
 
       <Pressable style={[styles.cancelButton, { top: insets.top + 10 }]} onPress={onCancel} hitSlop={10}>
@@ -332,6 +366,16 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         variant="outline"
         style={styles.finishButton}
       />
+
+      {incoming && (
+        <IncomingRaceCard
+          race={incoming}
+          busy={responding}
+          onAccept={acceptIncoming}
+          onDecline={() => respond(false, null)}
+          style={{ bottom: 110 }}
+        />
+      )}
     </View>
   );
 }

@@ -1476,7 +1476,9 @@ route("GET", "/api/races/:id", async ({ res, params, query }) => {
   const before = race.status;
   normalizeRaceStatus(race);
   if (race.status !== before) await db.save(state);
-  sendJson(res, 200, raceSummary(state, race, me.id));
+  // The race screen loads from here, so this is where the course has to
+  // come back -- it's left out of the progress polls, not out of this.
+  sendJson(res, 200, raceSummary(state, race, me.id, { includeCourse: true }));
 });
 
 route("POST", "/api/races/:id/respond", async ({ res, params, body }) => {
@@ -1615,15 +1617,18 @@ route("POST", "/api/races/:id/finish", async ({ res, params, body }) => {
 
   const dist = RACE_DISTANCES[race.distanceKey];
   const targetM = dist ? dist.meters : race.distanceM || 0;
+  // Crossing the line is a finish; stopping anywhere short of it is a
+  // forfeit -- ending the race by hand is never a way to win it. (Older app
+  // builds had a FINISH NOW button that called this part-way down the road;
+  // this keeps them honest too.)
+  const completed = Number.isFinite(distanceM) ? distanceM >= targetM * 0.99 : true;
   race.results[me.id] = buildRaceResult({
     durationMs,
     distanceM,
     avgSpeedKmh: Number(body.avgSpeedKmh),
     maxSpeedKmh: Number(body.maxSpeedKmh),
-    // Finishing by hand part-way down the road is allowed (see the FINISH
-    // NOW button), it just doesn't count as covering the distance.
-    completed: Number.isFinite(distanceM) ? distanceM >= targetM * 0.99 : true,
-    forfeited: false,
+    completed,
+    forfeited: !completed,
   });
 
   // A race is over the moment someone crosses the line (or ends it by

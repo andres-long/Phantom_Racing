@@ -306,7 +306,8 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         <Text style={styles.menuButtonText}>MAP</Text>
       </Pressable>
 
-      <View style={[styles.hud, { top: insets.top + 20 }]}>
+      {/* Starts below the x / MAP row rather than covering it. */}
+      <View style={[styles.hud, { top: insets.top + 56 }]}>
         <Text style={styles.destName} numberOfLines={1}>
           {destinationName}
         </Text>

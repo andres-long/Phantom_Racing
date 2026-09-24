@@ -321,7 +321,8 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         </Pressable>
       )}
 
-      <View style={[styles.hud, { top: insets.top + 20 }]}>
+      {/* Starts below the x / MAP row rather than covering it. */}
+      <View style={[styles.hud, { top: insets.top + 56 }]}>
         <Text style={styles.segmentName}>{segment.name}</Text>
         {autoStart && <Text style={styles.autoBadge}>AUTO-DETECTED -- RACING STARTED AUTOMATICALLY</Text>}
         <Text style={styles.time}>{formatDuration(elapsedMs)}</Text>

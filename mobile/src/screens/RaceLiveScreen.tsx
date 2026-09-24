@@ -27,6 +27,10 @@ import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RaceLive">;
 
+// The x / MAP buttons sit in a row at the top; the HUD starts below them
+// instead of being drawn over them (they used to peek out from behind it).
+const TOP_BUTTON_ROW_H = 56;
+
 // How often to push our own progress (and, via the same response, pick up
 // the opponent's) to the backend while the race is live.
 const PROGRESS_INTERVAL_MS = 2000;
@@ -213,21 +217,25 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     navigation.replace("RaceResult", { raceId });
   };
 
-  // Ending it here on purpose, short of the full distance: the time counts
-  // and the drive counts toward your stats, but stopping short loses to
-  // someone who actually covered the distance (see raceResultView on the
-  // backend). Finishing at or past the target is just a normal finish.
-  const onFinishNow = () => {
+  // Ending the race by hand. If you've already covered the distance (GPS
+  // just hadn't caught up to trigger the auto-finish) that's a normal
+  // finish; anywhere short of the line it's a forfeit -- the other racer
+  // wins. Ending it yourself is never a way to win it.
+  const onEndRace = () => {
     if (finishedRef.current) return;
     const remainingM = Math.max(0, targetDistanceRef.current - distanceCoveredRef.current);
+    if (remainingM <= 0) {
+      finishRace(distanceCoveredRef.current);
+      return;
+    }
     Alert.alert(
-      "Finish the race here?",
-      remainingM > 0
-        ? `You're still ${formatDistanceShort(remainingM, units)} short of the full ${race?.distanceLabel ?? "distance"}. Your time gets recorded, but stopping short loses to anyone who goes the distance.`
-        : "Your result will be recorded now.",
+      "End the race here?",
+      `You're ${formatDistanceShort(remainingM, units)} short of the finish, so ending now is a forfeit -- ${
+        race?.opponentDisplayName ?? "the other racer"
+      } wins. The distance you drove still counts toward your stats.`,
       [
         { text: "Keep racing", style: "cancel" },
-        { text: "Finish now", onPress: () => finishRace(distanceCoveredRef.current) },
+        { text: "End race (forfeit)", style: "destructive", onPress: forfeit },
       ]
     );
   };
@@ -513,7 +521,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       )}
 
       {(phase === "racing" || phase === "ending") && (
-        <View style={[styles.hud, { top: insets.top + 20 }]}>
+        <View style={[styles.hud, { top: insets.top + TOP_BUTTON_ROW_H }]}>
           <Text style={styles.raceLabel} numberOfLines={1}>
             {race.distanceLabel} {race.directionLabel} VS {race.opponentDisplayName}
           </Text>
@@ -558,8 +566,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
           done": end it here and keep your time, or hand them the win. */}
       {phase === "racing" && (
         <View style={[styles.raceActions, { bottom: insets.bottom + 24 }]}>
-          <NeonButton label="FINISH NOW" variant="outline" onPress={onFinishNow} style={styles.raceActionButton} />
-          <NeonButton label="FORFEIT" variant="outline" onPress={onBail} style={styles.raceActionButton} />
+          <NeonButton label="END RACE" variant="outline" onPress={onEndRace} style={styles.raceActionButton} />
         </View>
       )}
     </View>

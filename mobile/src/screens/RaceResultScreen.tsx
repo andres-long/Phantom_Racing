@@ -31,7 +31,7 @@ export default function RaceResultScreen({ route, navigation }: Props) {
   // If this race was run on top of a drive that's still recording (a Go To
   // trip, a track run, a new track), go back to that drive -- jumping
   // straight to the map would pop it off the stack and throw it away.
-  const DRIVE_SCREENS = ["RecordRun", "GoRace", "CreateSegment"];
+  const DRIVE_SCREENS = ["RecordRun", "GoRace", "CreateSegment", "SoloRun"];
   const drivingUnderneath = (() => {
     const state = navigation.getState();
     for (let i = state.index - 1; i >= 0; i--) {

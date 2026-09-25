@@ -24,7 +24,7 @@ const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || "need_for_speed";
 const STATE_DOC_ID = "state";
 
 function emptyState() {
-  return { users: [], segments: [], runs: [], trips: [], races: [], blocks: [] };
+  return { users: [], segments: [], runs: [], trips: [], races: [], blocks: [], soloRuns: [] };
 }
 
 // ---- JSON-file backend (local dev / no MONGODB_URI set) -------------------
@@ -192,6 +192,7 @@ async function loadMongo() {
     trips: doc.trips || [],
     races: doc.races || [],
     blocks: doc.blocks || [],
+    soloRuns: doc.soloRuns || [],
   };
 }
 
@@ -207,6 +208,7 @@ async function saveMongo(state) {
         trips: state.trips || [],
         races: state.races || [],
         blocks: state.blocks || [],
+        soloRuns: state.soloRuns || [],
       },
     },
     { upsert: true }

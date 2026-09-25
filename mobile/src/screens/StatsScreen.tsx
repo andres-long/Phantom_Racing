@@ -1,11 +1,20 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Pressable, RefreshControl } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList, GlobalStatsMetric, GlobalStatsResponse, GlobalStatsEntry } from "../types";
+import {
+  RootStackParamList,
+  GlobalStatsMetric,
+  GlobalStatsResponse,
+  GlobalStatsEntry,
+  SoloStatsResponse,
+  RaceDistanceKey,
+} from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { knownTopSpeedKmh } from "../topSpeed";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
+import { formatDuration } from "../utils/geo";
+import { RACE_DISTANCES } from "../raceDistances";
 import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
 
@@ -27,6 +36,13 @@ const METRICS: { key: GlobalStatsMetric; label: string }[] = [
   { key: "distance", label: "DISTANCE" },
   { key: "avgSpeed", label: "AVG SPEED" },
   { key: "wins", label: "RACE WINS" },
+];
+
+// Second row: fastest solo run at each distance (lowest time ranks first).
+const TIME_METRICS: { key: GlobalStatsMetric; label: string }[] = [
+  { key: "soloQuarter", label: "1/4 MI TIME" },
+  { key: "soloMile", label: "1 MI TIME" },
+  { key: "soloFive", label: "5 MI TIME" },
 ];
 
 // Two views of the same numbers. MINE: your lifetime totals across
@@ -64,6 +80,7 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
 function MyStats() {
   const { user, units } = useUser();
   const [totals, setTotals] = useState<Totals | null>(null);
+  const [solo, setSolo] = useState<SoloStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,6 +98,9 @@ function MyStats() {
           api.getUserRaces(user.deviceId).catch(() => []),
           api.getTopSpeed(user.deviceId).catch(() => ({ topSpeedKmh: 0, topSpeedAt: null })),
         ]);
+        const soloStats = await api.getUserSolo(user.deviceId).catch(() => null);
+        setSolo(soloStats);
+        const soloRuns = soloStats?.runs ?? [];
 
         let distanceM = 0;
         let durationMs = 0;
@@ -100,6 +120,11 @@ function MyStats() {
           durationMs += r.durationMs;
           if (r.maxSpeedKmh > topSpeedKmh) topSpeedKmh = r.maxSpeedKmh;
         }
+        for (const r of soloRuns) {
+          distanceM += r.distanceM;
+          durationMs += r.durationMs;
+          if (r.maxSpeedKmh > topSpeedKmh) topSpeedKmh = r.maxSpeedKmh;
+        }
         // Your fastest ever, including while you weren't recording anything
         // -- knownTopSpeedKmh() covers a best set in this session that
         // hasn't been sent to the server yet.
@@ -109,7 +134,7 @@ function MyStats() {
           topSpeedKmh,
           distanceM,
           avgSpeedKmh: durationMs > 0 ? distanceM / 1000 / (durationMs / 3_600_000) : 0,
-          driveCount: runs.length + trips.length + races.length,
+          driveCount: runs.length + trips.length + races.length + soloRuns.length,
           raceCount: races.length,
           raceWins: races.filter((r) => r.won === true).length,
         });
@@ -146,6 +171,21 @@ function MyStats() {
             <Text style={styles.tileValue}>{displaySpeedKmh(totals.avgSpeedKmh, units)}</Text>
             <Text style={styles.tileUnit}>{speedUnit(units)}</Text>
           </View>
+          {/* Personal bests from solo runs, one line per distance. */}
+          <View style={styles.tile}>
+            <Text style={styles.tileLabel}>BEST SOLO RUNS</Text>
+            {RACE_DISTANCES.map((d) => {
+              const best = solo?.bests[d.key as RaceDistanceKey] ?? null;
+              return (
+                <View key={d.key} style={styles.bestRow}>
+                  <Text style={styles.bestLabel}>{d.label}</Text>
+                  <Text style={best ? styles.bestTime : styles.bestNone}>
+                    {best ? formatDuration(best.durationMs) : "--"}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
           {totals.raceCount > 0 && (
             <View style={styles.tile}>
               <Text style={styles.tileLabel}>RACES WON</Text>
@@ -157,7 +197,7 @@ function MyStats() {
             {totals.driveCount > 0
               ? `Based on ${totals.driveCount} drive${
                   totals.driveCount === 1 ? "" : "s"
-                } -- segment runs, Go To trips and live races combined. `
+                } -- segment runs, Go To trips, live races and solo runs combined. `
               : "No recorded drives yet. "}
             Top speed also counts plain driving with the app open.
           </Text>
@@ -206,6 +246,9 @@ function WorldStats() {
     if (metric === "topSpeed") return `${displaySpeedKmh(e.topSpeedKmh, units)} ${speedUnit(units)}`;
     if (metric === "avgSpeed") return `${displaySpeedKmh(e.avgSpeedKmh, units)} ${speedUnit(units)}`;
     if (metric === "wins") return `${e.raceWins} of ${e.raceCount}`;
+    if (metric === "soloQuarter") return e.soloQuarterMs != null ? formatDuration(e.soloQuarterMs) : "--";
+    if (metric === "soloMile") return e.soloMileMs != null ? formatDuration(e.soloMileMs) : "--";
+    if (metric === "soloFive") return e.soloFiveMs != null ? formatDuration(e.soloFiveMs) : "--";
     return formatDistanceShort(e.distanceM, units);
   };
 
@@ -213,22 +256,24 @@ function WorldStats() {
 
   return (
     <View style={{ flex: 1 }}>
-      <View style={styles.metricRow}>
-        {METRICS.map((m) => {
-          const active = m.key === metric;
-          return (
-            <Pressable
-              key={m.key}
-              style={[styles.metricButton, active && styles.metricButtonActive]}
-              onPress={() => setMetric(m.key)}
-            >
-              <Text style={[styles.metricText, active && styles.metricTextActive]} numberOfLines={1}>
-                {m.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {[METRICS, TIME_METRICS].map((row, i) => (
+        <View key={i} style={styles.metricRow}>
+          {row.map((m) => {
+            const active = m.key === metric;
+            return (
+              <Pressable
+                key={m.key}
+                style={[styles.metricButton, active && styles.metricButtonActive]}
+                onPress={() => setMetric(m.key)}
+              >
+                <Text style={[styles.metricText, active && styles.metricTextActive]} numberOfLines={1}>
+                  {m.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ))}
 
       <ScrollView
         contentContainerStyle={styles.content}
@@ -252,7 +297,9 @@ function WorldStats() {
             ))}
             <Text style={styles.footnote}>
               {data.totalRacers} racer{data.totalRacers === 1 ? "" : "s"} ranked worldwide
-              {metric === "wins"
+              {metric === "soloQuarter" || metric === "soloMile" || metric === "soloFive"
+                ? " -- each racer's fastest solo run at this distance"
+                : metric === "wins"
                 ? " -- head-to-head races won, out of races finished"
                 : data.minDistanceM > 0
                 ? ` -- average speed counts racers with at least ${formatDistanceShort(data.minDistanceM, units)} driven`
@@ -315,7 +362,11 @@ const styles = StyleSheet.create({
   tabButtonActive: { borderColor: colors.cyan, backgroundColor: colors.cyanDim },
   tabButtonText: { color: colors.textSecondary, fontFamily: fonts.heading, fontSize: 13, letterSpacing: 1.5 },
   tabButtonTextActive: { color: colors.cyan },
-  metricRow: { flexDirection: "row", gap: 8, paddingHorizontal: 20, paddingTop: 12 },
+  metricRow: { flexDirection: "row", gap: 8, paddingHorizontal: 20, paddingTop: 10 },
+  bestRow: { flexDirection: "row", justifyContent: "space-between", alignSelf: "stretch", marginTop: 10 },
+  bestLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: "700", letterSpacing: 1 },
+  bestTime: { color: colors.gold, fontFamily: fonts.display, fontSize: 18 },
+  bestNone: { color: colors.textMuted, fontSize: 16 },
   metricButton: {
     flex: 1,
     borderWidth: 1,

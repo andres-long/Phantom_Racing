@@ -915,6 +915,7 @@ route("POST", "/api/users/:deviceId/delete", async ({ res, params, body }) => {
     runs: 0,
     trips: 0,
     races: 0,
+    soloRuns: 0,
     blocks: 0,
     privateSegments: 0,
     keptPublicSegments: 0,
@@ -933,6 +934,11 @@ route("POST", "/api/users/:deviceId/delete", async ({ res, params, body }) => {
   state.races = (state.races || []).filter((r) => {
     if (r.fromUserId !== user.id && r.toUserId !== user.id) return true;
     removed.races += 1;
+    return false;
+  });
+  state.soloRuns = (state.soloRuns || []).filter((r) => {
+    if (r.userId !== user.id) return true;
+    removed.soloRuns += 1;
     return false;
   });
   state.blocks = (state.blocks || []).filter((b) => {
@@ -1199,14 +1205,16 @@ const GLOBAL_STATS_LIMIT = 50;
 // Average speed is only ranked for racers with at least this much driving,
 // so a single 100m sprint can't top the table on its own.
 const GLOBAL_AVG_MIN_DISTANCE_M = 1000;
-const GLOBAL_STATS_METRICS = ["topSpeed", "distance", "avgSpeed", "wins"];
+const GLOBAL_STATS_METRICS = ["topSpeed", "distance", "avgSpeed", "wins", "soloQuarter", "soloMile", "soloFive"];
+// Fastest-time boards: best completed solo run per racer at one distance.
+const SOLO_METRIC_DISTANCE = { soloQuarter: "quarter", soloMile: "mile", soloFive: "five" };
 
 function computeGlobalStats(state) {
   const byUser = new Map();
   const add = (userId, distanceM, durationMs, maxSpeedKmh) => {
     let s = byUser.get(userId);
     if (!s) {
-      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0, raceCount: 0, raceWins: 0 };
+      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0, raceCount: 0, raceWins: 0, soloBestMs: {} };
       byUser.set(userId, s);
     }
     if (Number.isFinite(distanceM) && distanceM > 0) s.distanceM += distanceM;
@@ -1225,7 +1233,7 @@ function computeGlobalStats(state) {
   const ensure = (userId) => {
     let s = byUser.get(userId);
     if (!s) {
-      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0, raceCount: 0, raceWins: 0 };
+      s = { distanceM: 0, durationMs: 0, topSpeedKmh: 0, driveCount: 0, raceCount: 0, raceWins: 0, soloBestMs: {} };
       byUser.set(userId, s);
     }
     return s;
@@ -1259,6 +1267,19 @@ function computeGlobalStats(state) {
     if (passive > s.topSpeedKmh) s.topSpeedKmh = passive;
   }
 
+  // Solo timed runs: the driving counts like any other drive, and each
+  // racer's fastest completed time per distance feeds the time boards.
+  for (const run of state.soloRuns || []) {
+    if (run.status !== "finished" || !run.result || !(run.result.durationMs > 0)) continue;
+    const r = run.result;
+    if (isImplausibleRun(r.avgSpeedKmh, r.maxSpeedKmh)) continue;
+    add(run.userId, r.distanceM ?? 0, r.durationMs, r.maxSpeedKmh);
+    if (!r.completed) continue;
+    const s = ensure(run.userId);
+    const cur = s.soloBestMs[run.distanceKey];
+    if (cur == null || r.durationMs < cur) s.soloBestMs[run.distanceKey] = r.durationMs;
+  }
+
   const entries = [];
   for (const [userId, s] of byUser) {
     const user = state.users.find((u) => u.id === userId);
@@ -1272,6 +1293,9 @@ function computeGlobalStats(state) {
       driveCount: s.driveCount,
       raceCount: s.raceCount,
       raceWins: s.raceWins,
+      soloQuarterMs: s.soloBestMs.quarter ?? null,
+      soloMileMs: s.soloBestMs.mile ?? null,
+      soloFiveMs: s.soloBestMs.five ?? null,
     });
   }
   return entries;
@@ -1284,18 +1308,24 @@ route("GET", "/api/stats/global", async ({ res, query }) => {
   const state = await db.load();
   const me = deviceId ? findUserByDevice(state, deviceId) : null;
 
+  const soloKey = SOLO_METRIC_DISTANCE[metric];
   const valueOf = (e) =>
-    metric === "topSpeed"
+    soloKey
+      ? e[`solo${soloKey[0].toUpperCase()}${soloKey.slice(1)}Ms`]
+      : metric === "topSpeed"
       ? e.topSpeedKmh
       : metric === "distance"
       ? e.distanceM
       : metric === "wins"
       ? e.raceWins
       : e.avgSpeedKmh;
+  // Times rank fastest (lowest) first; everything else highest first.
   const eligible = computeGlobalStats(state)
     .filter((e) => (metric === "avgSpeed" ? e.distanceM >= GLOBAL_AVG_MIN_DISTANCE_M : true))
-    .filter((e) => valueOf(e) > 0)
-    .sort((a, b) => valueOf(b) - valueOf(a) || a.displayName.localeCompare(b.displayName));
+    .filter((e) => valueOf(e) != null && valueOf(e) > 0)
+    .sort((a, b) =>
+      (soloKey ? valueOf(a) - valueOf(b) : valueOf(b) - valueOf(a)) || a.displayName.localeCompare(b.displayName)
+    );
 
   const ranked = eligible.map((e, i) => {
     const { userId, ...rest } = e;
@@ -1681,6 +1711,192 @@ route("POST", "/api/races/:id/forfeit", async ({ res, params, body }) => {
   race.finishedAt = new Date().toISOString();
   await db.save(state);
   sendJson(res, 200, raceSummary(state, race, me.id));
+});
+
+// ---- Solo timed runs ------------------------------------------------------
+//
+// The same road course a head-to-head race gets (a real driving route from
+// where you are, the way you picked, cut to exactly the distance), but just
+// you against the clock. Finished runs are your personal bests per distance
+// and feed the worldwide fastest-times boards.
+
+function soloSummary(run, { includeCourse = false } = {}) {
+  const dist = RACE_DISTANCES[run.distanceKey];
+  const dirKey = RACE_DIRECTIONS[run.directionKey] ? run.directionKey : DEFAULT_RACE_DIRECTION;
+  return {
+    id: run.id,
+    distanceKey: run.distanceKey,
+    distanceM: dist ? dist.meters : 0,
+    distanceLabel: dist ? dist.label : "",
+    directionKey: dirKey,
+    directionLabel: RACE_DIRECTIONS[dirKey].label,
+    directionBearing: RACE_DIRECTIONS[dirKey].bearing,
+    courseDistanceM: run.course ? run.course.distanceM : null,
+    course: includeCourse && run.course ? run.course.points : null,
+    status: run.status,
+    createdAt: run.createdAt,
+    result: run.result || null,
+  };
+}
+
+// A user's fastest completed time at one distance, or null.
+function bestSoloResult(state, userId, distanceKey, excludeRunId) {
+  let best = null;
+  for (const r of state.soloRuns || []) {
+    if (r.userId !== userId || r.distanceKey !== distanceKey || r.id === excludeRunId) continue;
+    if (r.status !== "finished" || !r.result || !r.result.completed) continue;
+    if (isImplausibleRun(r.result.avgSpeedKmh, r.result.maxSpeedKmh)) continue;
+    if (!best || r.result.durationMs < best.durationMs) best = r.result;
+  }
+  return best;
+}
+
+route("POST", "/api/solo", async ({ res, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const distanceKey = body.distanceKey;
+  if (!RACE_DISTANCES[distanceKey]) {
+    return sendJson(res, 400, { error: `A valid distanceKey (${Object.keys(RACE_DISTANCES).join(", ")}) is required` });
+  }
+  const directionKey = RACE_DIRECTIONS[body.directionKey] ? body.directionKey : DEFAULT_RACE_DIRECTION;
+  const lat = Number(body.lat);
+  const lng = Number(body.lng);
+
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+
+  let course = null;
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    try {
+      course = await buildRaceCourse(
+        { lat, lng },
+        RACE_DIRECTIONS[directionKey].bearing,
+        RACE_DISTANCES[distanceKey].meters
+      );
+    } catch (e) {
+      course = null;
+    }
+  }
+
+  // One run at a time: any earlier run of yours that never finished (you
+  // backed out, or the app closed) is dropped rather than left to pile up.
+  state.soloRuns = (state.soloRuns || []).filter((r) => !(r.userId === me.id && r.status === "ready"));
+  const run = {
+    id: db.id("solo"),
+    userId: me.id,
+    distanceKey,
+    directionKey,
+    course,
+    status: "ready",
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+    result: null,
+  };
+  state.soloRuns.push(run);
+  await db.save(state);
+  sendJson(res, 201, soloSummary(run, { includeCourse: true }));
+});
+
+// Your time, once you cross the line (or end the run by hand short of it --
+// that still counts as driving for your stats, but not as a time).
+route("POST", "/api/solo/:id/finish", async ({ res, params, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const durationMs = Number(body.durationMs);
+  const distanceM = Number(body.distanceM);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return sendJson(res, 400, { error: "A valid durationMs is required" });
+  }
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+  const run = (state.soloRuns || []).find((r) => r.id === params.id);
+  if (!run || run.userId !== me.id) return sendJson(res, 404, { error: "Run not found" });
+  if (run.status !== "ready") return sendJson(res, 409, { error: "This run is already over." });
+
+  const target = run.course ? run.course.distanceM : RACE_DISTANCES[run.distanceKey].meters;
+  const completed = Number.isFinite(distanceM) ? distanceM >= target * 0.99 : false;
+  const previousBest = bestSoloResult(state, me.id, run.distanceKey, run.id);
+
+  run.result = buildRaceResult({
+    durationMs,
+    distanceM,
+    avgSpeedKmh: Number(body.avgSpeedKmh),
+    maxSpeedKmh: Number(body.maxSpeedKmh),
+    completed,
+    forfeited: false,
+  });
+  run.status = "finished";
+  run.finishedAt = new Date().toISOString();
+  await db.save(state);
+
+  const counts = completed && !isImplausibleRun(run.result.avgSpeedKmh, run.result.maxSpeedKmh);
+  const isPersonalBest = counts && (!previousBest || run.result.durationMs < previousBest.durationMs);
+
+  // Where this time sits worldwide at this distance (everyone's best).
+  let worldRank = null;
+  if (counts) {
+    const bests = new Map();
+    for (const r of state.soloRuns) {
+      if (r.distanceKey !== run.distanceKey || r.status !== "finished" || !r.result || !r.result.completed) continue;
+      if (isImplausibleRun(r.result.avgSpeedKmh, r.result.maxSpeedKmh)) continue;
+      const cur = bests.get(r.userId);
+      if (cur == null || r.result.durationMs < cur) bests.set(r.userId, r.result.durationMs);
+    }
+    const mine = bests.get(me.id);
+    worldRank = 1 + [...bests.values()].filter((t) => t < mine).length;
+  }
+
+  sendJson(res, 200, {
+    ...soloSummary(run),
+    counted: counts,
+    isPersonalBest,
+    previousBestMs: previousBest ? previousBest.durationMs : null,
+    worldRank,
+  });
+});
+
+// Backing out before you ever started: nothing to record.
+route("POST", "/api/solo/:id/abandon", async ({ res, params, body }) => {
+  const deviceId = (body.deviceId || "").trim();
+  const state = await db.load();
+  const me = findUserByDevice(state, deviceId);
+  if (!me) return sendJson(res, 400, { error: "Unknown deviceId." });
+  const before = (state.soloRuns || []).length;
+  state.soloRuns = (state.soloRuns || []).filter(
+    (r) => !(r.id === params.id && r.userId === me.id && r.status === "ready")
+  );
+  if (state.soloRuns.length !== before) await db.save(state);
+  sendJson(res, 200, { abandoned: state.soloRuns.length !== before });
+});
+
+// Your personal bests per distance, plus recent finished runs.
+route("GET", "/api/users/:deviceId/solo", async ({ res, params }) => {
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found" });
+  const bests = {};
+  for (const key of Object.keys(RACE_DISTANCES)) {
+    const b = bestSoloResult(state, user.id, key);
+    bests[key] = b
+      ? { durationMs: b.durationMs, avgSpeedKmh: b.avgSpeedKmh, maxSpeedKmh: b.maxSpeedKmh, finishedAt: b.finishedAt }
+      : null;
+  }
+  const runs = (state.soloRuns || [])
+    .filter((r) => r.userId === user.id && r.status === "finished" && r.result)
+    .sort((a, b) => new Date(b.finishedAt) - new Date(a.finishedAt))
+    .slice(0, 50)
+    .map((r) => ({
+      runId: r.id,
+      distanceKey: r.distanceKey,
+      distanceLabel: RACE_DISTANCES[r.distanceKey]?.label ?? "",
+      durationMs: r.result.durationMs,
+      distanceM: r.result.distanceM ?? 0,
+      avgSpeedKmh: r.result.avgSpeedKmh,
+      maxSpeedKmh: r.result.maxSpeedKmh,
+      completed: r.result.completed,
+      recordedAt: r.finishedAt,
+    }));
+  sendJson(res, 200, { bests, runs });
 });
 
 // "Clear whatever's open between us and let me challenge them again." The

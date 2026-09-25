@@ -21,6 +21,7 @@ import GoSummaryScreen from "../screens/GoSummaryScreen";
 import StatsScreen from "../screens/StatsScreen";
 import RaceLiveScreen from "../screens/RaceLiveScreen";
 import RaceResultScreen from "../screens/RaceResultScreen";
+import SoloRunScreen from "../screens/SoloRunScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -113,6 +114,7 @@ export default function AppNavigator() {
             />
             <Stack.Screen name="RaceLive" component={RaceLiveScreen} />
             <Stack.Screen name="RaceResult" component={RaceResultScreen} />
+            <Stack.Screen name="SoloRun" component={SoloRunScreen} />
           </>
         )}
       </Stack.Navigator>

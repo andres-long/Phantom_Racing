@@ -25,6 +25,9 @@ import {
   BlockedPlayer,
   GlobalStatsMetric,
   GlobalStatsResponse,
+  SoloRun,
+  SoloFinishResponse,
+  SoloStatsResponse,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -308,6 +311,40 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ deviceId, durationMs, distanceM, avgSpeedKmh, maxSpeedKmh }),
     }),
+
+  // Solo timed runs. Creating one lays out the road course from where you
+  // are (position required for that); finishing records your time.
+  createSoloRun: (
+    deviceId: string,
+    distanceKey: RaceDistanceKey,
+    directionKey: RaceDirectionKey,
+    position: LatLng | null
+  ) =>
+    request<SoloRun>("/api/solo", {
+      method: "POST",
+      body: JSON.stringify({ deviceId, distanceKey, directionKey, lat: position?.lat, lng: position?.lng }),
+    }),
+
+  finishSoloRun: (
+    runId: string,
+    deviceId: string,
+    durationMs: number,
+    distanceM: number,
+    avgSpeedKmh: number,
+    maxSpeedKmh: number
+  ) =>
+    request<SoloFinishResponse>(`/api/solo/${runId}/finish`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId, durationMs, distanceM, avgSpeedKmh, maxSpeedKmh }),
+    }),
+
+  abandonSoloRun: (runId: string, deviceId: string) =>
+    poll<{ abandoned: boolean }>(`/api/solo/${runId}/abandon`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId }),
+    }),
+
+  getUserSolo: (deviceId: string) => request<SoloStatsResponse>(`/api/users/${deviceId}/solo`),
 
   // Cancels whatever race is still open between the two of you, so a race
   // left hanging by a closed app doesn't permanently block new challenges.

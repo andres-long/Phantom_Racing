@@ -36,7 +36,7 @@ export type BackgroundLocationPoint = {
   speedKmh: number;
 };
 
-export type TrackingOwner = "run" | "segment" | "trip" | "race";
+export type TrackingOwner = "run" | "segment" | "trip" | "race" | "solo";
 
 type Listener = (points: BackgroundLocationPoint[]) => void;
 const listeners = new Map<TrackingOwner, Listener>();

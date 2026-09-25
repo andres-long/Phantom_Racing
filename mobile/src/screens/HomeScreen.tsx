@@ -170,6 +170,9 @@ export default function HomeScreen({ navigation, route }: Props) {
   // Racer picker (from the HUD's "N racers on the map" line), for when
   // there's more than one to choose between.
   const [pickingRacer, setPickingRacer] = useState(false);
+  // Solo run picker: distance, then direction, then off to SoloRunScreen.
+  const [soloStep, setSoloStep] = useState<"closed" | "distance" | "direction">("closed");
+  const [soloDistanceKey, setSoloDistanceKey] = useState<RaceDistanceKey | null>(null);
 
   // Whether the map should keep recentering on you as you move. On by
   // default (that's the whole point of this fix -- your position marker
@@ -1152,6 +1155,58 @@ export default function HomeScreen({ navigation, route }: Props) {
         </View>
       )}
 
+      {/* Solo run: a real road course the distance and way you pick, just
+          you against the clock -- times go on your stats and the world
+          boards. */}
+      {soloStep !== "closed" && !busy && (
+        <View style={[styles.card, { bottom: hudBottom }]}>
+          <Pressable style={styles.cardClose} onPress={() => setSoloStep("closed")} hitSlop={8}>
+            <Text style={styles.cardCloseText}>x</Text>
+          </Pressable>
+          <Text style={styles.cardTitle}>Solo run</Text>
+          {soloStep === "distance" ? (
+            <>
+              <Text style={styles.cardMeta}>
+                Pick a distance. A real road course is laid out from where you are, and your time goes on the board.
+              </Text>
+              <View style={styles.distanceRow}>
+                {RACE_DISTANCES.map((d) => (
+                  <Pressable
+                    key={d.key}
+                    style={styles.distanceOption}
+                    onPress={() => {
+                      setSoloDistanceKey(d.key);
+                      setSoloStep("direction");
+                    }}
+                  >
+                    <Text style={styles.distanceOptionText}>{d.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={styles.cardMeta}>Which way? Pick the direction the road actually goes.</Text>
+              <View style={styles.distanceRow}>
+                {RACE_DIRECTIONS.map((d) => (
+                  <Pressable
+                    key={d.key}
+                    style={styles.distanceOption}
+                    onPress={() => {
+                      if (!soloDistanceKey) return;
+                      setSoloStep("closed");
+                      navigation.navigate("SoloRun", { distanceKey: soloDistanceKey, directionKey: d.key });
+                    }}
+                  >
+                    <Text style={styles.distanceOptionText}>{d.short}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </>
+          )}
+        </View>
+      )}
+
       {/* Not while you're already recording or racing something else --
           accepting would start a second drive on top of the first. */}
       {incomingRace && canRace && (
@@ -1181,24 +1236,33 @@ export default function HomeScreen({ navigation, route }: Props) {
 
       {busy ? (
         <NeonButton
-          label={busy.kind === "race" ? "BACK TO THE RACE" : "BACK TO RECORDING"}
+          label={busy.kind === "race" ? "BACK TO THE RACE" : busy.kind === "solo" ? "BACK TO YOUR RUN" : "BACK TO RECORDING"}
           onPress={() => navigation.goBack()}
           style={[styles.fabWide, { bottom: bottomBase }]}
         />
       ) : (
-        <>
+        <View style={[styles.fabRow, { bottom: bottomBase }]}>
           <NeonButton
-            label="+ NEW SEGMENT"
+            label="+ SEGMENT"
             variant="outline"
             onPress={() => navigation.navigate("CreateSegment")}
-            style={[styles.fab, { bottom: bottomBase }]}
+            style={styles.fabRowButton}
           />
           <NeonButton
-            label="GO TO..."
-            onPress={() => navigation.navigate("GoTo")}
-            style={[styles.fabRight, { bottom: bottomBase }]}
+            label="SOLO RUN"
+            variant="outline"
+            onPress={() => {
+              setSelectedId(null);
+              setSelectedUser(null);
+              setPickingRacer(false);
+              setRaceStep("closed");
+              setSoloDistanceKey(null);
+              setSoloStep("distance");
+            }}
+            style={styles.fabRowButton}
           />
-        </>
+          <NeonButton label="GO TO..." onPress={() => navigation.navigate("GoTo")} style={styles.fabRowButton} />
+        </View>
       )}
     </View>
   );
@@ -1385,7 +1449,16 @@ const styles = StyleSheet.create({
     right: 20,
     width: "44%",
   },
-  // Takes the place of both FABs while something is recording underneath.
+  // GO TO / SOLO RUN / + SEGMENT, evenly across the bottom.
+  fabRow: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    flexDirection: "row",
+    gap: 8,
+  },
+  fabRowButton: { flex: 1 },
+  // Takes the place of the bottom buttons while something is recording underneath.
   fabWide: {
     position: "absolute",
     bottom: 24,

@@ -239,7 +239,15 @@ export type TopSpeedResponse = { topSpeedKmh: number; topSpeedAt: string | null 
 
 // ---- Worldwide stats leaderboard (Stats screen's WORLD tab) ------------
 
-export type GlobalStatsMetric = "topSpeed" | "distance" | "avgSpeed" | "wins";
+export type GlobalStatsMetric =
+  | "topSpeed"
+  | "distance"
+  | "avgSpeed"
+  | "wins"
+  // Fastest completed solo run at each distance (lower is better).
+  | "soloQuarter"
+  | "soloMile"
+  | "soloFive";
 
 export type GlobalStatsEntry = {
   rank: number;
@@ -252,6 +260,59 @@ export type GlobalStatsEntry = {
   // Head-to-head record: races finished, and how many of them they took.
   raceCount: number;
   raceWins: number;
+  // Best completed solo time at each distance, ms -- null if none yet.
+  soloQuarterMs: number | null;
+  soloMileMs: number | null;
+  soloFiveMs: number | null;
+};
+
+// ---- Solo timed runs ----------------------------------------------------
+
+// A solo run against the clock on a real road course -- the same course a
+// head-to-head race gets, just you. `course` comes back when the run is
+// created; null if routing couldn't lay one out (then progress falls back to
+// the compass axis, like a race without a course).
+export type SoloRun = {
+  id: string;
+  distanceKey: RaceDistanceKey;
+  distanceM: number;
+  distanceLabel: string;
+  directionKey: RaceDirectionKey;
+  directionLabel: string;
+  directionBearing: number;
+  courseDistanceM: number | null;
+  course: LatLng[] | null;
+  status: "ready" | "finished";
+  createdAt: string;
+  result: RaceResult | null;
+};
+
+export type SoloFinishResponse = SoloRun & {
+  // Did it go down as a time (covered the distance, plausible speeds)?
+  counted: boolean;
+  isPersonalBest: boolean;
+  previousBestMs: number | null;
+  // Where your best at this distance ranks worldwide; null if not counted.
+  worldRank: number | null;
+};
+
+export type SoloBest = { durationMs: number; avgSpeedKmh: number; maxSpeedKmh: number; finishedAt: string };
+
+export type SoloHistoryEntry = {
+  runId: string;
+  distanceKey: RaceDistanceKey;
+  distanceLabel: string;
+  durationMs: number;
+  distanceM: number;
+  avgSpeedKmh: number;
+  maxSpeedKmh: number;
+  completed: boolean;
+  recordedAt: string;
+};
+
+export type SoloStatsResponse = {
+  bests: Record<RaceDistanceKey, SoloBest | null>;
+  runs: SoloHistoryEntry[];
 };
 
 export type GlobalStatsResponse = {
@@ -270,7 +331,7 @@ export type GlobalStatsResponse = {
 // timing and reporting the whole time) -- Home is pushed on top of it, shows
 // a banner saying so, and going back drops you straight back into it.
 export type BusyDrive = {
-  kind: "run" | "segment" | "trip" | "race";
+  kind: "run" | "segment" | "trip" | "race" | "solo";
   label: string;
 };
 
@@ -298,5 +359,6 @@ export type RootStackParamList = {
   GoSummary: { result: SubmitTripResponse };
   Stats: undefined;
   RaceLive: { raceId: string };
+  SoloRun: { distanceKey: RaceDistanceKey; directionKey: RaceDirectionKey };
   RaceResult: { raceId: string };
 };

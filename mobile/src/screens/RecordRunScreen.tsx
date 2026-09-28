@@ -37,7 +37,7 @@ import { useStaleSpeedReset } from "../utils/speed";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { feedTrackTimer, suppressTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
-import ZoomControls from "../components/ZoomControls";
+import MapCameraControls from "../components/MapCameraButtons";
 import { CHECKPOINT_NAMES } from "../components/SplitsTable";
 
 // A crossed checkpoint's readout stays up this long.
@@ -167,6 +167,8 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         if (status !== "granted") return;
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         setMyPos({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+        // Start with you in the middle of the map, not the track's start.
+        camera.recenter({ lat: loc.coords.latitude, lng: loc.coords.longitude });
         if (loc.coords.heading != null && loc.coords.heading >= 0) {
           setHeading(loc.coords.heading);
         }
@@ -369,8 +371,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        onRegionChange={camera.onRegionChange}
-        onRegionChangeComplete={camera.onRegionChangeComplete}
+        {...camera.mapProps}
         initialRegion={{
           latitude: segment.points[0].lat,
           longitude: segment.points[0].lng,
@@ -472,7 +473,12 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         )}
       </View>
 
-      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
+      <MapCameraControls
+        viewLabel={camera.viewLabel}
+        following={camera.following}
+        onCycleView={camera.cycleView}
+        onRecenter={() => camera.recenter(myPos)}
+      />
 
       <NeonButton
         label={submitting ? "SUBMITTING..." : recording ? "FINISH RUN" : "START RUN"}

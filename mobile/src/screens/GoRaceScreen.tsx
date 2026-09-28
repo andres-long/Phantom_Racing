@@ -28,7 +28,7 @@ import { RacerMarkers, IncomingRaceCard } from "../components/RacersOnTheRoad";
 import { useStaleSpeedReset } from "../utils/speed";
 import { feedTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
-import ZoomControls from "../components/ZoomControls";
+import MapCameraControls from "../components/MapCameraButtons";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "GoRace">;
@@ -306,8 +306,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        onRegionChange={camera.onRegionChange}
-        onRegionChangeComplete={camera.onRegionChangeComplete}
+        {...camera.mapProps}
         initialRegion={{
           latitude: initialRoute[0]?.lat ?? destination.lat,
           longitude: initialRoute[0]?.lng ?? destination.lng,
@@ -335,7 +334,12 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
 
-      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
+      <MapCameraControls
+        viewLabel={camera.viewLabel}
+        following={camera.following}
+        onCycleView={camera.cycleView}
+        onRecenter={() => camera.recenter(myPos)}
+      />
 
       <Pressable style={[styles.cancelButton, { top: insets.top + 10 }]} onPress={onCancel} hitSlop={10}>
         <Text style={styles.cancelText}>x</Text>

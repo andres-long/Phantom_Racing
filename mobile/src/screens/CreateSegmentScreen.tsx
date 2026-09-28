@@ -28,7 +28,7 @@ import { RacerMarkers, IncomingRaceCard } from "../components/RacersOnTheRoad";
 import { useStaleSpeedReset } from "../utils/speed";
 import { feedTrackTimer, refreshTrackTimerTracks } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
-import ZoomControls from "../components/ZoomControls";
+import MapCameraControls from "../components/MapCameraButtons";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
@@ -242,8 +242,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        onRegionChange={camera.onRegionChange}
-        onRegionChangeComplete={camera.onRegionChangeComplete}
+        {...camera.mapProps}
         initialRegion={{
           latitude: trace[0]?.lat ?? myPos?.lat ?? 14.6349,
           longitude: trace[0]?.lng ?? myPos?.lng ?? -90.5069,
@@ -272,7 +271,12 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
 
-      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
+      <MapCameraControls
+        viewLabel={camera.viewLabel}
+        following={camera.following}
+        onCycleView={camera.cycleView}
+        onRecenter={() => camera.recenter(myPos)}
+      />
 
       <View style={[styles.hud, { top: insets.top + 20 }]}>
         <Text style={styles.hudText}>

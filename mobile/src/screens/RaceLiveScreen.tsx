@@ -27,7 +27,7 @@ import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { useStaleSpeedReset } from "../utils/speed";
 import { feedTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
-import ZoomControls from "../components/ZoomControls";
+import MapCameraControls from "../components/MapCameraButtons";
 
 // Your own driven line is thinned to a point every this-many metres, and
 // halved again if it gets huge -- a 200 mile race would otherwise draw tens
@@ -538,8 +538,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        onRegionChange={camera.onRegionChange}
-        onRegionChangeComplete={camera.onRegionChangeComplete}
+        {...camera.mapProps}
         initialRegion={
           myPos
             ? { latitude: myPos.lat, longitude: myPos.lng, latitudeDelta: 0.006, longitudeDelta: 0.006 }
@@ -588,7 +587,12 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
         <Text style={styles.cancelText}>x</Text>
       </Pressable>
 
-      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
+      <MapCameraControls
+        viewLabel={camera.viewLabel}
+        following={camera.following}
+        onCycleView={camera.cycleView}
+        onRecenter={() => camera.recenter(myPos)}
+      />
 
       {/* Straight to the map, without ending the race. */}
       <Pressable style={[styles.menuButton, { top: insets.top + 10 }]} onPress={openMenu} hitSlop={10}>

@@ -29,7 +29,7 @@ import { RACE_DIRECTIONS } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { cleanSpeedKmh, useStaleSpeedReset } from "../utils/speed";
 import NeonButton from "../components/NeonButton";
-import ZoomControls from "../components/ZoomControls";
+import { CameraButton, TargetButton } from "../components/MapCameraButtons";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import { feedTrackTimer } from "../trackTimer";
 import VehicleMarker from "../components/VehicleMarker";
@@ -130,7 +130,10 @@ export default function HomeScreen({ navigation, route }: Props) {
   const focusCountRef = useRef(0);
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
-  const camera = useFollowCamera(mapRef);
+  // Keeps you centred as you drive. Dragging the map away to look around
+  // pauses it (no auto-resume here -- Home is also for browsing the map);
+  // the target button brings it back. See useFollowCamera.
+  const camera = useFollowCamera(mapRef, { autoResumeMs: 0 });
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
 
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
@@ -177,14 +180,6 @@ export default function HomeScreen({ navigation, route }: Props) {
   const [soloDistanceKey, setSoloDistanceKey] = useState<RaceDistanceKey | null>(null);
   const [soloShape, setSoloShape] = useState<SoloShape>("sprint");
 
-  // Whether the map should keep recentering on you as you move. On by
-  // default (that's the whole point of this fix -- your position marker
-  // used to drift out of view within a few seconds of driving). Turned off
-  // the moment you drag the map yourself (onPanDrag, below) so looking
-  // around isn't fought every second by an auto-recenter; the recenter
-  // button turns it back on. A ref, not state, because it's read from
-  // inside the location-watcher closure set up in useFocusEffect.
-  const followRef = useRef(true);
 
   // Presence (live location sharing) plumbing. All refs, not state, because
   // sendHeartbeatTick/refreshPresence are called from a setInterval set up
@@ -315,10 +310,9 @@ export default function HomeScreen({ navigation, route }: Props) {
         latestPosRef.current = { coords: pos, heading: validHeading };
         reportPosition(pos, validHeading);
 
-        if (followRef.current) {
-          // Street level, at whatever zoom you've set (+/- or pinch).
-          camera.follow(pos);
-        }
+        // Street level, at whatever view you've set (camera button or
+        // pinch) -- unless you've dragged the map away.
+        camera.follow(pos);
 
         if (!live) return;
         // 0 when you're actually stopped, not GPS drift.
@@ -547,11 +541,7 @@ export default function HomeScreen({ navigation, route }: Props) {
 
   const selected = nearby.find((s) => s.id === selectedId) ?? null;
 
-  const recenter = () => {
-    if (!userPos) return;
-    followRef.current = true;
-    camera.follow(userPos, 400, true);
-  };
+  const recenter = () => camera.recenter(userPos);
 
   // Arrived here from a recording screen by tapping a racer: once they're
   // on this map, open their card straight at the distance picker.
@@ -721,7 +711,7 @@ export default function HomeScreen({ navigation, route }: Props) {
           // permission prompt was up on first launch), jump to it now --
           // the watcher only fires again after you move ~5m.
           const pos = latestPosRef.current;
-          if (pos && followRef.current) camera.follow(pos.coords, 300, true);
+          if (pos && camera.following) camera.recenter(pos.coords);
         }}
         onPress={() => {
           setSelectedId(null);
@@ -729,13 +719,13 @@ export default function HomeScreen({ navigation, route }: Props) {
           setRaceStep("closed");
           setRaceError(null);
         }}
-        onPanDrag={() => {
-          followRef.current = false;
-        }}
-        onRegionChange={camera.onRegionChange}
-        onRegionChangeComplete={(region, details) => {
-          // A pinch sets the zoom the follow camera keeps.
-          camera.onRegionChangeComplete(region, details);
+        onPanDrag={camera.onPanDrag}
+        onTouchStart={camera.mapProps.onTouchStart}
+        onTouchEnd={camera.mapProps.onTouchEnd}
+        onRegionChangeComplete={(region) => {
+          // A pinch sets the zoom the follow camera keeps; a drag away
+          // pauses following.
+          camera.onRegionChangeComplete(region);
           regionRef.current = region;
           // Refresh right away on top of the periodic tick, so panning to a
           // new area shows who's there without waiting up to
@@ -927,10 +917,16 @@ export default function HomeScreen({ navigation, route }: Props) {
         </Text>
       </Pressable>
 
-      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} bottom={hudBottom + 162} />
-      <Pressable style={[styles.recenterButton, { bottom: hudBottom + 58 }]} onPress={recenter}>
-        <Text style={styles.recenterIcon}>o</Text>
-      </Pressable>
+      <CameraButton
+        viewLabel={camera.viewLabel}
+        onPress={camera.cycleView}
+        style={{ position: "absolute", right: 16, bottom: hudBottom + 162 }}
+      />
+      <TargetButton
+        following={camera.following}
+        onPress={recenter}
+        style={{ position: "absolute", right: 16, bottom: hudBottom + 58 }}
+      />
 
       <View style={[styles.speedHud, { bottom: hudBottom }]}>
         {loading ? (
@@ -1398,7 +1394,6 @@ const styles = StyleSheet.create({
   tracksToggleOff: { borderColor: colors.panelBorder, opacity: 0.8 },
   tracksToggleText: { color: colors.cyan, fontSize: 8, fontWeight: "800", textAlign: "center", letterSpacing: 0.3 },
   tracksToggleTextOff: { color: colors.textMuted },
-  recenterIcon: { color: colors.cyan, fontSize: 18, fontWeight: "800" },
   speedHud: {
     position: "absolute",
     left: 16,

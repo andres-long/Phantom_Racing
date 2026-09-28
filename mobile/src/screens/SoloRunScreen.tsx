@@ -27,7 +27,7 @@ import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { useStaleSpeedReset } from "../utils/speed";
 import { feedTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
-import ZoomControls from "../components/ZoomControls";
+import MapCameraControls from "../components/MapCameraButtons";
 
 type Props = NativeStackScreenProps<RootStackParamList, "SoloRun">;
 
@@ -330,8 +330,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
-        onRegionChange={camera.onRegionChange}
-        onRegionChangeComplete={camera.onRegionChangeComplete}
+        {...camera.mapProps}
         initialRegion={
           myPos
             ? { latitude: myPos.lat, longitude: myPos.lng, latitudeDelta: 0.01, longitudeDelta: 0.01 }
@@ -468,7 +467,12 @@ export default function SoloRunScreen({ route, navigation }: Props) {
       )}
 
       {(phase === "running" || phase === "ready") && (
-        <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
+        <MapCameraControls
+        viewLabel={camera.viewLabel}
+        following={camera.following}
+        onCycleView={camera.cycleView}
+        onRecenter={() => camera.recenter(myPos)}
+      />
       )}
 
       {phase === "ready" && (

@@ -178,7 +178,10 @@ export default function AllSegmentsScreen({ navigation }: Props) {
                     title: item.name.toUpperCase(),
                     stats: [
                       { label: "Distance", value: formatDistanceLong(item.lengthM, units, 2) },
-                      { label: "Record", value: item.bestTimeMs != null ? formatDuration(item.bestTimeMs) : "--" },
+                      {
+                        label: item.bestTimeUser ? `Record by ${item.bestTimeUser}` : "Record",
+                        value: item.bestTimeMs != null ? formatDuration(item.bestTimeMs) : "--",
+                      },
                       { label: "Runs", value: `${item.runCount}` },
                     ],
                     route: item.points,

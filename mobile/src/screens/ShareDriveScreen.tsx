@@ -14,7 +14,7 @@ import {
 import MapView, { Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { LinearGradient } from "expo-linear-gradient";
-import Svg, { Polyline as SvgPolyline, Circle } from "react-native-svg";
+import Svg, { Polyline as SvgPolyline, Circle, Line } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, LatLng, SegmentSummary, RunHistoryEntry } from "../types";
@@ -31,13 +31,13 @@ type Props = NativeStackScreenProps<RootStackParamList, "ShareDrive">;
 
 // What's behind the stats: your own photo (the Strava-style overlay -- the
 // numbers, the route line and the wordmark floating straight on the
-// picture), the map with the route on it, or a plain branded card.
+// picture), the map with the route on it, or a Tron-style grid.
 type Backdrop = "photo" | "map" | "card";
 
 const BACKDROPS: { key: Backdrop; label: string }[] = [
   { key: "photo", label: "PHOTO" },
   { key: "map", label: "MAP" },
-  { key: "card", label: "CARD" },
+  { key: "card", label: "GRID" },
 ];
 
 // What the card shows: the drive you came from, or any track you pick.
@@ -52,6 +52,16 @@ type Content = {
 
 // A track you can pick to share, with your own best on it (if any).
 type TrackChoice = { segment: SegmentSummary; best: RunHistoryEntry | null };
+
+// Tron look: the route is a glowing cyan light-line.
+const ROUTE = colors.cyan;
+const ROUTE_GLOW = "rgba(44, 232, 245, 0.28)";
+const GRID_LINE = "rgba(44, 232, 245, 0.13)";
+
+// "Record by <name>" -- the track record and who holds it.
+function recordStat(ms: number | null, holder: string | null) {
+  return { label: holder ? `Record by ${holder}` : "Record", value: ms != null ? formatDuration(ms) : "--" };
+}
 
 // Saved at story size (9:16).
 const OUT_W = 1080;
@@ -74,9 +84,8 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
     raceId: route.params.raceId,
   };
   const [content, setContent] = useState<Content>(fromDrive);
-  const [backdrop, setBackdrop] = useState<Backdrop>(
-    fromDrive.route || fromDrive.segmentId || fromDrive.raceId ? "map" : "card"
-  );
+  // Opens on the Tron grid; MAP and PHOTO are a tap away.
+  const [backdrop, setBackdrop] = useState<Backdrop>("card");
   const [path, setPath] = useState<LatLng[] | null>(fromDrive.route);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [mapShot, setMapShot] = useState<string | null>(null);
@@ -132,6 +141,29 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
       .then((loc) => loc && setMapCenter({ lat: loc.coords.latitude, lng: loc.coords.longitude }))
       .catch(() => {});
   }, [path, mapCenter]);
+
+  // A drive on a track (a timed run): add the track record and who holds
+  // it, if the card has room and doesn't show it already.
+  useEffect(() => {
+    const segId = content.segmentId;
+    if (!segId || content.stats.length >= 4 || content.stats.some((st) => st.label.startsWith("Record"))) return;
+    let cancelled = false;
+    api
+      .getSegment(segId, user?.deviceId)
+      .then((seg) => {
+        if (cancelled || seg.bestTimeMs == null) return;
+        setContent((c) =>
+          c.segmentId === segId && c.stats.length < 4 && !c.stats.some((st) => st.label.startsWith("Record"))
+            ? { ...c, stats: [...c.stats, recordStat(seg.bestTimeMs, seg.bestTimeUser)] }
+            : c
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content.segmentId]);
 
   // Opened on a track (All Tracks' SHARE): fill in your own best on it.
   useEffect(() => {
@@ -289,25 +321,17 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
         ? [
             length,
             { label: "My best", value: formatDuration(best.durationMs) },
-            { label: "Avg speed", value: `${displaySpeedKmh(best.avgSpeedKmh, units)} ${speedUnit(units)}` },
             { label: "Top speed", value: `${displaySpeedKmh(best.maxSpeedKmh, units)} ${speedUnit(units)}` },
+            recordStat(seg.bestTimeMs, seg.bestTimeUser),
           ]
-        : [
-            length,
-            {
-              label: "Record",
-              value: seg.bestTimeMs != null ? formatDuration(seg.bestTimeMs) : "--",
-            },
-            { label: "Runs", value: `${seg.runCount}` },
-          ];
+        : [length, recordStat(seg.bestTimeMs, seg.bestTimeUser), { label: "Runs", value: `${seg.runCount}` }];
       setContent({
         title: seg.name.toUpperCase(),
-        subtitle: subtitle ?? (!best && seg.bestTimeUser ? `RECORD BY ${seg.bestTimeUser.toUpperCase()}` : undefined),
+        subtitle,
         stats,
         route: seg.points.length >= 2 ? seg.points : null,
         segmentId: seg.id,
       });
-      if (backdrop === "card" && !photoUri) setBackdrop("map");
     } catch (e: any) {
       Alert.alert("Couldn't load that track", e.message || "Try again.");
     } finally {
@@ -347,6 +371,7 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
               TEXT_SHADOW,
               { fontSize: (onPhoto ? 11 : 10) * scale },
             ]}
+            numberOfLines={1}
           >
             {s.label}
           </Text>
@@ -363,16 +388,27 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
 
   const routeBlock = routeSvg && (
     <Svg width={routeSvg.boxW} height={routeSvg.boxH} style={{ marginTop: (onPhoto ? 12 : 16) * scale }}>
+      {/* A soft wide stroke under a thin bright one: a light-line. */}
       <SvgPolyline
         points={routeSvg.points}
         fill="none"
-        stroke={colors.racePrimary}
-        strokeWidth={(onPhoto ? 3 : 4) * scale}
+        stroke={ROUTE_GLOW}
+        strokeWidth={(onPhoto ? 9 : 11) * scale}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <SvgPolyline
+        points={routeSvg.points}
+        fill="none"
+        stroke={ROUTE}
+        strokeWidth={(onPhoto ? 3 : 3.5) * scale}
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       {!onPhoto && <Circle cx={routeSvg.start.x} cy={routeSvg.start.y} r={4 * scale} fill="#ffffff" />}
-      {!onPhoto && <Circle cx={routeSvg.end.x} cy={routeSvg.end.y} r={4 * scale} fill={colors.gold} />}
+      {!onPhoto && (
+        <Circle cx={routeSvg.end.x} cy={routeSvg.end.y} r={4.5 * scale} fill={colors.bg} stroke={ROUTE} strokeWidth={2 * scale} />
+      )}
     </Svg>
   );
 
@@ -406,9 +442,7 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
           </Pressable>
         ))}
 
-      {backdrop === "card" && (
-        <LinearGradient colors={["#0b1a2e", "#05070c", "#2a0d0a"]} style={StyleSheet.absoluteFill} />
-      )}
+      {backdrop === "card" && <TronGrid width={cardW} height={cardH} scale={scale} />}
 
       {backdrop === "map" &&
         (mapShot ? (
@@ -437,8 +471,15 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
             {drawPath && (
               <Polyline
                 coordinates={drawPath.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
-                strokeColor={colors.racePrimary}
-                strokeWidth={5}
+                strokeColor={ROUTE_GLOW}
+                strokeWidth={14}
+              />
+            )}
+            {drawPath && (
+              <Polyline
+                coordinates={drawPath.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+                strokeColor={ROUTE}
+                strokeWidth={4}
               />
             )}
           </MapView>
@@ -613,6 +654,50 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
   );
 }
 
+// The GRID backdrop: a dark Tron floor -- a flat grid up top running into
+// a perspective grid below a glowing horizon.
+function TronGrid({ width, height, scale }: { width: number; height: number; scale: number }) {
+  const step = 28 * scale;
+  const horizon = height * 0.62;
+  const lines = [];
+  for (let x = step; x < width; x += step) {
+    lines.push(<Line key={`v${x}`} x1={x} y1={0} x2={x} y2={horizon} stroke={GRID_LINE} strokeWidth={1} />);
+  }
+  for (let y = step; y < horizon; y += step) {
+    lines.push(<Line key={`h${y}`} x1={0} y1={y} x2={width} y2={y} stroke={GRID_LINE} strokeWidth={1} />);
+  }
+  // Floor: lines fanning out from the middle of the horizon, rungs closing
+  // up toward it.
+  const vx = width / 2;
+  for (let i = -8; i <= 8; i++) {
+    lines.push(
+      <Line
+        key={`f${i}`}
+        x1={vx + i * step * 0.35}
+        y1={horizon}
+        x2={vx + i * step * 2.2}
+        y2={height}
+        stroke={GRID_LINE}
+        strokeWidth={1.2}
+      />
+    );
+  }
+  for (let k = 1; k <= 7; k++) {
+    const y = horizon + (height - horizon) * Math.pow(k / 7, 1.8);
+    lines.push(<Line key={`r${k}`} x1={0} y1={y} x2={width} y2={y} stroke={GRID_LINE} strokeWidth={1.2} />);
+  }
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <LinearGradient colors={["#02060b", "#041019", "#020508"]} style={StyleSheet.absoluteFill} />
+      <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+        {lines}
+        <Line x1={0} y1={horizon} x2={width} y2={horizon} stroke={ROUTE_GLOW} strokeWidth={6 * scale} />
+        <Line x1={0} y1={horizon} x2={width} y2={horizon} stroke={ROUTE} strokeWidth={1.5 * scale} />
+      </Svg>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, alignItems: "center" },
   topRow: {
@@ -668,7 +753,7 @@ const styles = StyleSheet.create({
   mapBottom: { position: "absolute", left: 0, right: 0, alignItems: "center" },
   statsStack: { alignItems: "center" },
   title: { color: "#ffffff", fontFamily: fonts.heading, letterSpacing: 1.5, textAlign: "center", paddingHorizontal: 20 },
-  subtitle: { color: colors.gold, fontFamily: fonts.heading, letterSpacing: 1.5, marginTop: 4, textAlign: "center" },
+  subtitle: { color: colors.cyan, fontFamily: fonts.heading, letterSpacing: 1.5, marginTop: 4, textAlign: "center" },
   statLabel: { color: "rgba(255,255,255,0.85)", fontWeight: "700", letterSpacing: 1 },
   statValue: { color: "#ffffff", fontFamily: fonts.heading },
   // The photo overlay reads like Strava's: a light label over a heavy number.
@@ -683,7 +768,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     paddingHorizontal: 16,
   },
-  segmentOptionActive: { borderColor: colors.racePrimary, backgroundColor: colors.racePrimaryDim },
+  segmentOptionActive: { borderColor: colors.cyan, backgroundColor: colors.cyanDim },
   segmentText: { color: colors.textSecondary, fontSize: 11, fontWeight: "800", letterSpacing: 1 },
   segmentTextActive: { color: colors.textPrimary },
   photoRow: { flexDirection: "row", gap: 10, marginTop: 10 },
@@ -711,7 +796,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
   },
-  choiceRowActive: { backgroundColor: colors.racePrimaryDim },
+  choiceRowActive: { backgroundColor: colors.cyanDim },
   choiceName: { color: colors.textPrimary, fontSize: 14, fontWeight: "700" },
   choiceMeta: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
   choiceError: { color: colors.danger, fontSize: 13, marginVertical: 16 },

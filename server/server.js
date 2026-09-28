@@ -495,24 +495,30 @@ async function buildRaceCourse(start, bearingDeg, targetM) {
 const LOOP_TOLERANCE = 0.12;
 
 async function buildLoopCourse(start, bearingDeg, targetM) {
-  let side = targetM / 3 / 1.3;
   let best = null;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const b = destinationPoint(start, bearingDeg, side);
-    const c = destinationPoint(start, bearingDeg + 60, side);
-    let route;
-    try {
-      route = await requestDrivingRoute(start, start, [b, c]);
-    } catch (e) {
-      // A corner in the sea or the middle of nowhere: try a tighter loop.
-      if (!e.noRoute) throw e;
-      side *= 0.6;
-      continue;
+  // The triangle can fold either way off the chosen bearing (its second
+  // corner 60 degrees right, or left); on a real street grid the two come
+  // back quite different, so both get a few tries at the right size.
+  for (const turn of [60, -60]) {
+    let side = targetM / 3 / 1.3;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const b = destinationPoint(start, bearingDeg, side);
+      const c = destinationPoint(start, bearingDeg + turn, side);
+      let route;
+      try {
+        route = await requestDrivingRoute(start, start, [b, c]);
+      } catch (e) {
+        // A corner in the sea or the middle of nowhere: try a tighter loop.
+        if (!e.noRoute) throw e;
+        side *= 0.6;
+        continue;
+      }
+      const len = geo.polylineLength(route.points);
+      if (!best || Math.abs(len - targetM) < Math.abs(best.len - targetM)) best = { points: route.points, len };
+      if (Math.abs(len - targetM) <= targetM * 0.05) break;
+      side = (side * targetM) / Math.max(len, 1);
     }
-    const len = geo.polylineLength(route.points);
-    if (!best || Math.abs(len - targetM) < Math.abs(best.len - targetM)) best = { points: route.points, len };
-    if (Math.abs(len - targetM) <= targetM * 0.05) break;
-    side = (side * targetM) / Math.max(len, 1);
+    if (best && Math.abs(best.len - targetM) <= targetM * 0.05) break;
   }
   if (!best || best.points.length < 2 || best.len < targetM * 0.5) return null;
   return {

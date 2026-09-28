@@ -26,6 +26,9 @@ import { useNearbyRacers } from "../hooks/useNearbyRacers";
 import { useIncomingRace } from "../hooks/useIncomingRace";
 import { RacerMarkers, IncomingRaceCard } from "../components/RacersOnTheRoad";
 import { useStaleSpeedReset } from "../utils/speed";
+import { feedTrackTimer } from "../trackTimer";
+import { useFollowCamera } from "../hooks/useFollowCamera";
+import ZoomControls from "../components/ZoomControls";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "GoRace">;
@@ -69,6 +72,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
   const [submitting, setSubmitting] = useState(false);
 
   const mapRef = useRef<MapView | null>(null);
+  const camera = useFollowCamera(mapRef);
   // The background-location listener is registered once (empty-deps mount
   // effect below) so its closure would otherwise keep seeing the route from
   // that first render forever, even after a reroute swaps `plannedRoute` --
@@ -176,15 +180,12 @@ export default function GoRaceScreen({ route, navigation }: Props) {
     setMyPos({ lat: last.lat, lng: last.lng });
     if (last.heading != null) setHeading(last.heading);
     presencePosRef.current = { coords: { lat: last.lat, lng: last.lng }, heading: last.heading ?? null };
-    // Tighter than the old 0.015 so turns on small roads/blocks are easier
-    // to spot coming up, rather than getting lost in a wide zoomed-out view.
-    mapRef.current?.animateToRegion(
-      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.006, longitudeDelta: 0.006 },
-      500
-    );
+    // Street-level follow, at whatever zoom you've set (+/- or pinch).
+    camera.follow({ lat: last.lat, lng: last.lng });
     setSpeedKmh(last.speedKmh);
     markFix();
     recordSpeed(last.speedKmh);
+    feedTrackTimer(last);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
       setMaxSpeedKmh(last.speedKmh);
@@ -305,6 +306,8 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
+        onRegionChange={camera.onRegionChange}
+        onRegionChangeComplete={camera.onRegionChangeComplete}
         initialRegion={{
           latitude: initialRoute[0]?.lat ?? destination.lat,
           longitude: initialRoute[0]?.lng ?? destination.lng,
@@ -331,6 +334,8 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         )}
         <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
+
+      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
 
       <Pressable style={[styles.cancelButton, { top: insets.top + 10 }]} onPress={onCancel} hitSlop={10}>
         <Text style={styles.cancelText}>x</Text>

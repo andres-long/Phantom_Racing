@@ -28,6 +28,8 @@ import {
   SoloRun,
   SoloFinishResponse,
   SoloStatsResponse,
+  SoloShape,
+  CheckpointsResponse,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -153,6 +155,12 @@ export const api = {
       `/api/segments/${segmentId}/leaderboard${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ""}`
     ),
 
+  // The track's four checkpoints with sector records.
+  getCheckpoints: (segmentId: string, deviceId?: string) =>
+    request<CheckpointsResponse>(
+      `/api/segments/${segmentId}/checkpoints${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ""}`
+    ),
+
   getGhost: (segmentId: string, runId?: string, deviceId?: string) => {
     const params = new URLSearchParams();
     if (runId) params.set("runId", runId);
@@ -193,7 +201,7 @@ export const api = {
   // Everyone's lifetime stats ranked by one metric, plus your own rank.
   getGlobalStats: (metric: GlobalStatsMetric, deviceId?: string) =>
     request<GlobalStatsResponse>(
-      `/api/stats/global?metric=${metric}${deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ""}`
+      `/api/stats/global?metric=${encodeURIComponent(metric)}${deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ""}`
     ),
 
   // "Go to a place" -- destination search (Places), routing (Directions),
@@ -318,11 +326,12 @@ export const api = {
     deviceId: string,
     distanceKey: RaceDistanceKey,
     directionKey: RaceDirectionKey,
-    position: LatLng | null
+    position: LatLng | null,
+    shape: SoloShape = "sprint"
   ) =>
     request<SoloRun>("/api/solo", {
       method: "POST",
-      body: JSON.stringify({ deviceId, distanceKey, directionKey, lat: position?.lat, lng: position?.lng }),
+      body: JSON.stringify({ deviceId, distanceKey, directionKey, shape, lat: position?.lat, lng: position?.lng }),
     }),
 
   finishSoloRun: (

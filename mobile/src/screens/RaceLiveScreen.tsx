@@ -8,7 +8,7 @@ import { RootStackParamList, LatLng, RaceChallenge, RaceProgress } from "../type
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
-import { formatDuration, cumulativeDistances, projectOntoPolyline } from "../utils/geo";
+import { formatDuration, cumulativeDistances, advanceAlongPolyline, aheadWindowM, haversine } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -25,6 +25,15 @@ import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceH
 import { directionalProgressM } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { useStaleSpeedReset } from "../utils/speed";
+import { feedTrackTimer } from "../trackTimer";
+import { useFollowCamera } from "../hooks/useFollowCamera";
+import ZoomControls from "../components/ZoomControls";
+
+// Your own driven line is thinned to a point every this-many metres, and
+// halved again if it gets huge -- a 200 mile race would otherwise draw tens
+// of thousands of points.
+const TRACE_MIN_STEP_M = 20;
+const TRACE_MAX_POINTS = 3000;
 
 type Props = NativeStackScreenProps<RootStackParamList, "RaceLive">;
 
@@ -70,6 +79,14 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   const [opponentProgress, setOpponentProgress] = useState<RaceProgress | null>(null);
 
   const mapRef = useRef<MapView | null>(null);
+  const camera = useFollowCamera(mapRef);
+  const lastFixTRef = useRef(0);
+  // Progress posts go out from the GPS handler too, not only the timer:
+  // JS timers stall while the phone is locked, GPS batches don't, and a
+  // long race with nothing posted for 15 minutes reads as abandoned.
+  const lastPostRef = useRef(0);
+  const postingRef = useRef(false);
+  const postProgressRef = useRef<(() => Promise<void>) | null>(null);
   const distanceCoveredRef = useRef(0);
   const speedKmhRef = useRef(0);
   const lastPointRef = useRef<LatLng | null>(null);
@@ -324,14 +341,12 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     if (last.heading != null) setHeading(last.heading);
     presencePosRef.current = { coords: pos, heading: last.heading ?? null };
     reportPosition(pos, last.heading ?? null);
-    mapRef.current?.animateToRegion(
-      { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.012, longitudeDelta: 0.012 },
-      500
-    );
+    camera.follow(pos);
     setSpeedKmh(last.speedKmh);
     speedKmhRef.current = last.speedKmh;
     markFix();
     recordSpeed(last.speedKmh);
+    feedTrackTimer(last);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
     }
@@ -342,11 +357,20 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     }
     lastPointRef.current = pos;
     if (courseRef.current && courseRef.current.length >= 2) {
-      // How far down the course road you've got. Kept monotonic so a GPS
-      // wobble (or a course that doubles back near itself) can't take
-      // distance back off you once you've driven it.
-      const { distanceAlongM } = projectOntoPolyline(courseRef.current, courseCumRef.current, pos);
-      distanceCoveredRef.current = Math.max(distanceCoveredRef.current, distanceAlongM);
+      // How far down the course road you've got, fix by fix: never
+      // backwards, and a course that doubles back near itself can't jump
+      // you ahead (see advanceAlongPolyline).
+      for (const p of points) {
+        const gap = lastFixTRef.current ? p.t - lastFixTRef.current : 1000;
+        lastFixTRef.current = p.t;
+        distanceCoveredRef.current = advanceAlongPolyline(
+          courseRef.current,
+          courseCumRef.current,
+          { lat: p.lat, lng: p.lng },
+          distanceCoveredRef.current,
+          aheadWindowM(gap)
+        ).distanceAlongM;
+      }
     } else {
       // No course: the compass axis. Never below zero, so driving the wrong
       // way just leaves you at the line rather than digging a hole you have
@@ -357,12 +381,22 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       );
     }
     setDistanceCoveredM(distanceCoveredRef.current);
-    setTrace((prev) => [...prev, ...points.map((p) => ({ lat: p.lat, lng: p.lng }))]);
+    setTrace((prev) => {
+      let next = prev;
+      for (const p of points) {
+        const tail = next[next.length - 1];
+        if (!tail || haversine(tail, p) >= TRACE_MIN_STEP_M) next = [...next, { lat: p.lat, lng: p.lng }];
+      }
+      if (next.length > TRACE_MAX_POINTS) next = next.filter((_, i) => i % 2 === 0 || i === next.length - 1);
+      return next;
+    });
     setElapsedMs(Date.now() - actualStartRef.current);
 
     if (distanceCoveredRef.current >= targetDistanceRef.current) {
       finishRace(distanceCoveredRef.current);
+      return;
     }
+    if (Date.now() - lastPostRef.current >= PROGRESS_INTERVAL_MS) postProgressRef.current?.();
   };
 
   // Starts tracking the instant the countdown hits zero.
@@ -382,6 +416,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       lastPointRef.current = null;
       startPointRef.current = null;
       distanceCoveredRef.current = 0;
+      lastFixTRef.current = 0;
       setBackgroundLocationListener(handleLocationPoints, "race");
       await startBackgroundTracking(`Racing ${race?.opponentDisplayName ?? "another driver"} -- tap to return to Phantom Racing.`, "race");
     })();
@@ -399,7 +434,9 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     if (phase !== "racing" || !user) return;
     let cancelled = false;
     const tick = async () => {
-      if (finishedRef.current) return;
+      if (finishedRef.current || postingRef.current) return;
+      postingRef.current = true;
+      lastPostRef.current = Date.now();
       try {
         const updated = await api.postRaceProgress(
           raceId,
@@ -432,11 +469,17 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
             { text: "OK", onPress: () => navigation.goBack() },
           ]);
         }
+      } finally {
+        postingRef.current = false;
       }
     };
-    const t = setInterval(tick, PROGRESS_INTERVAL_MS);
+    postProgressRef.current = tick;
+    const t = setInterval(() => {
+      if (Date.now() - lastPostRef.current >= PROGRESS_INTERVAL_MS - 200) tick();
+    }, 500);
     return () => {
       cancelled = true;
+      postProgressRef.current = null;
       clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -495,9 +538,11 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
+        onRegionChange={camera.onRegionChange}
+        onRegionChangeComplete={camera.onRegionChangeComplete}
         initialRegion={
           myPos
-            ? { latitude: myPos.lat, longitude: myPos.lng, latitudeDelta: 0.012, longitudeDelta: 0.012 }
+            ? { latitude: myPos.lat, longitude: myPos.lng, latitudeDelta: 0.006, longitudeDelta: 0.006 }
             : FALLBACK_REGION
         }
       >
@@ -542,6 +587,8 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       <Pressable style={[styles.cancelButton, { top: insets.top + 10 }]} onPress={onBail} hitSlop={10}>
         <Text style={styles.cancelText}>x</Text>
       </Pressable>
+
+      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
 
       {/* Straight to the map, without ending the race. */}
       <Pressable style={[styles.menuButton, { top: insets.top + 10 }]} onPress={openMenu} hitSlop={10}>

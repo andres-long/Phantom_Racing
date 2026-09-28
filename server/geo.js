@@ -105,6 +105,34 @@ function projectOntoPolyline(points, cumDist, p) {
 }
 
 /**
+ * How far along a polyline a position is, given how far along you already
+ * were. A plain nearest-point projection breaks on any course that passes
+ * the same spot twice -- a loop (whose start IS its finish), or a road
+ * driven out and back -- because standing at the start is just as close to
+ * the finish. So only the stretch just behind to some way ahead of where you
+ * were is considered, preferring the nearer-along of two equally close
+ * matches; positions off the course leave you where you were.
+ */
+const ADVANCE_BACK_M = 30;
+const ADVANCE_MAX_LATERAL_M = 150;
+function advanceAlongPolyline(points, cumDist, p, prevM, aheadM) {
+  if (points.length < 2) return { distanceAlongM: prevM, lateralDistanceM: Infinity };
+  let best = null;
+  for (let i = 0; i < points.length - 1; i++) {
+    if (cumDist[i + 1] < prevM - ADVANCE_BACK_M) continue;
+    if (cumDist[i] > prevM + aheadM) break;
+    const { distanceAlong, lateralDistanceM } = projectOntoSegment(points[i], points[i + 1], p);
+    const along = cumDist[i] + distanceAlong;
+    const score = lateralDistanceM + 0.05 * Math.max(0, along - prevM);
+    if (!best || score < best.score) best = { distanceAlongM: along, lateralDistanceM, score };
+  }
+  if (!best || best.lateralDistanceM > ADVANCE_MAX_LATERAL_M) {
+    return { distanceAlongM: prevM, lateralDistanceM: best ? best.lateralDistanceM : Infinity };
+  }
+  return { distanceAlongM: Math.max(prevM, best.distanceAlongM), lateralDistanceM: best.lateralDistanceM };
+}
+
+/**
  * Converts a raw GPS trace (array of {lat,lng,t}) for a completed run into a
  * "ghost profile": a monotonic array of {distanceAlongM, elapsedMs} sampled
  * against the segment's own polyline. This is what lets us answer "how far
@@ -115,17 +143,18 @@ function buildGhostProfile(segmentPoints, segmentCumDist, trace) {
   if (trace.length === 0) return [];
   const t0 = trace[0].t;
   const profile = [];
-  let lastDistance = -Infinity;
+  // Walked forward point by point (see advanceAlongPolyline), so it's
+  // monotonic and a loop's start can't be read as its finish. The window
+  // ahead grows with any gap between fixes (a tunnel, a paused phone).
+  let lastDistance = 0;
+  let lastT = t0;
   for (const pt of trace) {
-    const { distanceAlongM } = projectOntoPolyline(
-      segmentPoints,
-      segmentCumDist,
-      pt
-    );
-    // Keep it monotonic (GPS jitter can otherwise make you "go backwards").
-    const distance = Math.max(distanceAlongM, lastDistance);
-    lastDistance = distance;
-    profile.push({ distanceAlongM: distance, elapsedMs: pt.t - t0 });
+    const gapS = Math.max(1, (pt.t - lastT) / 1000);
+    const aheadM = Math.max(500, gapS * 90);
+    const { distanceAlongM } = advanceAlongPolyline(segmentPoints, segmentCumDist, pt, lastDistance, aheadM);
+    lastDistance = distanceAlongM;
+    lastT = pt.t;
+    profile.push({ distanceAlongM: lastDistance, elapsedMs: pt.t - t0 });
   }
   return profile;
 }
@@ -255,5 +284,6 @@ module.exports = {
   buildGhostProfile,
   ghostElapsedAtDistance,
   validateRunAgainstSegment,
+  advanceAlongPolyline,
   decodePolyline,
 };

@@ -26,6 +26,9 @@ import { useNearbyRacers } from "../hooks/useNearbyRacers";
 import { useIncomingRace } from "../hooks/useIncomingRace";
 import { RacerMarkers, IncomingRaceCard } from "../components/RacersOnTheRoad";
 import { useStaleSpeedReset } from "../utils/speed";
+import { feedTrackTimer, refreshTrackTimerTracks } from "../trackTimer";
+import { useFollowCamera } from "../hooks/useFollowCamera";
+import ZoomControls from "../components/ZoomControls";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
@@ -51,6 +54,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const maxSpeedRef = useRef(0);
   const mapRef = useRef<MapView | null>(null);
+  const camera = useFollowCamera(mapRef);
   // Keeps this device visible on other users' maps while recording -- see
   // usePresenceHeartbeat.
   const presencePosRef: PresencePositionRef = useRef(null);
@@ -143,16 +147,14 @@ export default function CreateSegmentScreen({ navigation }: Props) {
     setSpeedKmh(last.speedKmh);
     markFix();
     recordSpeed(last.speedKmh);
+    feedTrackTimer(last);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
     }
     // Keep the map following you the whole recording, same as an actual
     // race -- otherwise the view stays wherever it opened and the road
     // you're drawing quickly runs off screen.
-    mapRef.current?.animateToRegion(
-      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
-      500
-    );
+    camera.follow({ lat: last.lat, lng: last.lng });
   };
 
   const startRecording = async () => {
@@ -201,6 +203,8 @@ export default function CreateSegmentScreen({ navigation }: Props) {
     setSubmitting(true);
     try {
       const segment = await api.createSegment(name.trim(), trace, user.deviceId, maxSpeedRef.current, isPrivate);
+      // Timeable in the background from your very next pass.
+      refreshTrackTimerTracks();
       if (segment.run) {
         navigation.replace("RunSummary", {
           result: segment.run,
@@ -238,6 +242,8 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
+        onRegionChange={camera.onRegionChange}
+        onRegionChangeComplete={camera.onRegionChangeComplete}
         initialRegion={{
           latitude: trace[0]?.lat ?? myPos?.lat ?? 14.6349,
           longitude: trace[0]?.lng ?? myPos?.lng ?? -90.5069,
@@ -265,6 +271,8 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         )}
         <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
+
+      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
 
       <View style={[styles.hud, { top: insets.top + 20 }]}>
         <Text style={styles.hudText}>

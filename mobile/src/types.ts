@@ -45,7 +45,28 @@ export type SubmitRunResponse = {
   rank: number;
   totalRuns: number;
   isNewRecord: boolean;
+  // Checkpoints: elapsed ms at 25/50/75/100% of the track, each sector's
+  // time, the sector records this run was up against (null = none yet), and
+  // which sectors it set a new record in. Absent from older servers.
+  splitsMs?: number[];
+  sectorsMs?: number[];
+  sectorRecordsMs?: (number | null)[];
+  sectorIsRecord?: boolean[];
 };
+
+// A track's checkpoint at 25/50/75/100% of its length, with the fastest time
+// through the sector ending there and the fastest time to reach it.
+export type TrackCheckpoint = {
+  index: number;
+  fraction: number;
+  distanceM: number;
+  bestSectorMs: number | null;
+  bestSectorBy: string | null;
+  bestSplitMs: number | null;
+  bestSplitBy: string | null;
+};
+
+export type CheckpointsResponse = { segmentId: string; checkpoints: TrackCheckpoint[] };
 
 // Response to creating a segment. The recording that defines a segment is
 // itself a full lap of it, so the backend auto-submits it as that
@@ -110,7 +131,21 @@ export type MapBounds = { north: number; south: number; east: number; west: numb
 
 // ---- Live race challenges (head-to-head against a nearby player) ------
 
-export type RaceDistanceKey = "quarter" | "mile" | "five";
+export type RaceDistanceKey =
+  | "quarter"
+  | "mile"
+  | "five"
+  | "m10"
+  | "m20"
+  | "m50"
+  | "m80"
+  | "m100"
+  | "m150"
+  | "m200";
+
+// A solo run's course: straight out the chosen way, or a closed loop that
+// brings you back round to where you started.
+export type SoloShape = "sprint" | "loop";
 
 // Which way a race is run -- both racers agree up front, and only progress
 // in that direction counts (see raceDirections.ts).
@@ -247,7 +282,10 @@ export type GlobalStatsMetric =
   // Fastest completed solo run at each distance (lower is better).
   | "soloQuarter"
   | "soloMile"
-  | "soloFive";
+  | "soloFive"
+  // Any distance: `solo:<key>` for straight runs, `loop:<key>` for loops.
+  | `solo:${RaceDistanceKey}`
+  | `loop:${RaceDistanceKey}`;
 
 export type GlobalStatsEntry = {
   rank: number;
@@ -264,6 +302,8 @@ export type GlobalStatsEntry = {
   soloQuarterMs: number | null;
   soloMileMs: number | null;
   soloFiveMs: number | null;
+  // Every best time, keyed by distance (`quarter`) or loop (`quarter:loop`).
+  soloBestsMs?: Record<string, number>;
 };
 
 // ---- Solo timed runs ----------------------------------------------------
@@ -282,6 +322,10 @@ export type SoloRun = {
   directionBearing: number;
   courseDistanceM: number | null;
   course: LatLng[] | null;
+  shape: SoloShape;
+  // Can this run go down as a time? A loop has to come out close to the
+  // distance picked, and a straight course can't have run out of road.
+  timeEligible: boolean;
   status: "ready" | "finished";
   createdAt: string;
   result: RaceResult | null;
@@ -307,11 +351,13 @@ export type SoloHistoryEntry = {
   avgSpeedKmh: number;
   maxSpeedKmh: number;
   completed: boolean;
+  shape?: SoloShape;
   recordedAt: string;
 };
 
 export type SoloStatsResponse = {
-  bests: Record<RaceDistanceKey, SoloBest | null>;
+  bests: Partial<Record<RaceDistanceKey, SoloBest | null>>;
+  loopBests?: Partial<Record<RaceDistanceKey, SoloBest | null>>;
   runs: SoloHistoryEntry[];
 };
 
@@ -359,6 +405,6 @@ export type RootStackParamList = {
   GoSummary: { result: SubmitTripResponse };
   Stats: undefined;
   RaceLive: { raceId: string };
-  SoloRun: { distanceKey: RaceDistanceKey; directionKey: RaceDirectionKey };
+  SoloRun: { distanceKey: RaceDistanceKey; directionKey: RaceDirectionKey; shape?: SoloShape };
   RaceResult: { raceId: string };
 };

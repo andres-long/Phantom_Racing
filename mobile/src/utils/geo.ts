@@ -83,6 +83,45 @@ export function projectOntoPolyline(points: LatLng[], cumDist: number[], p: LatL
   return best!;
 }
 
+/**
+ * How far along a course you are now, given how far along you already were
+ * (mirrors advanceAlongPolyline in server/geo.js). A plain nearest-point
+ * projection breaks on any course that passes the same spot twice -- a loop,
+ * whose start IS its finish, or a road driven out and back -- so only the
+ * stretch from just behind to `aheadM` ahead of where you were is searched,
+ * preferring the nearer-along of two equally close matches. Positions off
+ * the course (more than ~150 m away) leave you where you were. Never goes
+ * backwards.
+ */
+export function advanceAlongPolyline(
+  points: LatLng[],
+  cumDist: number[],
+  p: LatLng,
+  prevM: number,
+  aheadM = 500
+): { distanceAlongM: number; lateralDistanceM: number } {
+  if (points.length < 2) return { distanceAlongM: prevM, lateralDistanceM: Infinity };
+  let best: { along: number; lateral: number; score: number } | null = null;
+  for (let i = 0; i < points.length - 1; i++) {
+    if (cumDist[i + 1] < prevM - 30) continue;
+    if (cumDist[i] > prevM + aheadM) break;
+    const { distanceAlong, lateralDistanceM } = projectOntoSegment(points[i], points[i + 1], p);
+    const along = cumDist[i] + distanceAlong;
+    const score = lateralDistanceM + 0.05 * Math.max(0, along - prevM);
+    if (!best || score < best.score) best = { along, lateral: lateralDistanceM, score };
+  }
+  if (!best || best.lateral > 150) {
+    return { distanceAlongM: prevM, lateralDistanceM: best ? best.lateral : Infinity };
+  }
+  return { distanceAlongM: Math.max(prevM, best.along), lateralDistanceM: best.lateral };
+}
+
+/** Window ahead to search, given the time since the last fix (fixes can
+ *  bunch up or pause -- a tunnel, a locked phone). */
+export function aheadWindowM(gapMs: number): number {
+  return Math.max(500, (Math.max(0, gapMs) / 1000) * 90);
+}
+
 /** Elapsed time (ms) the ghost had reached at a given distance along the segment. */
 export function ghostElapsedAtDistance(profile: GhostSample[], distanceAlongM: number): number | null {
   if (profile.length === 0) return null;
@@ -188,6 +227,10 @@ export function formatDuration(ms: number): string {
   const totalSeconds = abs / 1000;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = (totalSeconds % 60).toFixed(1);
+  // Long hauls (50-200 mile runs) read as h:mm:ss.
+  if (minutes >= 60) {
+    return `${sign}${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${seconds.padStart(4, "0")}`;
+  }
   if (minutes > 0) return `${sign}${minutes}:${seconds.padStart(4, "0")}`;
   return `${sign}${seconds}s`;
 }

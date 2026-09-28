@@ -8,7 +8,7 @@ import { RootStackParamList, LatLng, SoloRun, SoloFinishResponse } from "../type
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
-import { formatDuration, cumulativeDistances, projectOntoPolyline } from "../utils/geo";
+import { formatDuration, cumulativeDistances, advanceAlongPolyline, aheadWindowM } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -25,6 +25,9 @@ import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceH
 import { directionalProgressM } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { useStaleSpeedReset } from "../utils/speed";
+import { feedTrackTimer } from "../trackTimer";
+import { useFollowCamera } from "../hooks/useFollowCamera";
+import ZoomControls from "../components/ZoomControls";
 
 type Props = NativeStackScreenProps<RootStackParamList, "SoloRun">;
 
@@ -35,12 +38,16 @@ const TOP_BUTTON_ROW_H = 56;
 
 type Phase = "locating" | "ready" | "countdown" | "running" | "saving" | "done" | "error";
 
-// A solo sprint against the clock on a real road course -- the same course a
-// head-to-head race gets (a driving route from where you are, the way you
-// picked, cut to exactly the distance), just you. Your time goes down as a
-// personal best for that distance and onto the worldwide time boards.
+// A solo run against the clock on a real road course -- either a sprint
+// (the same course a head-to-head race gets: a driving route from where you
+// are, the way you picked, cut to exactly the distance) or a closed loop
+// that heads out that way and brings you back round to where you started.
+// Your time goes down as a personal best for that distance and shape, and
+// onto the worldwide time boards (loops have their own).
 export default function SoloRunScreen({ route, navigation }: Props) {
   const { distanceKey, directionKey } = route.params;
+  const shape = route.params.shape ?? "sprint";
+  const isLoop = shape === "loop";
   const { user, vehicleStyle, units } = useUser();
   const { reportPosition } = useProximityVoiceContext();
   const insets = useSafeAreaInsets();
@@ -68,6 +75,8 @@ export default function SoloRunScreen({ route, navigation }: Props) {
   const distanceRef = useRef(0);
   const maxSpeedRef = useRef(0);
   const finishedRef = useRef(false);
+  const lastFixTRef = useRef(0);
+  const camera = useFollowCamera(mapRef);
   const presencePosRef: PresencePositionRef = useRef(null);
   usePresenceHeartbeat(presencePosRef);
   const markFix = useStaleSpeedReset(() => setSpeedKmh(0));
@@ -94,7 +103,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
         setMyPos(pos);
         presencePosRef.current = { coords: pos, heading: null };
 
-        const created = await api.createSoloRun(user.deviceId, distanceKey, directionKey, pos);
+        const created = await api.createSoloRun(user.deviceId, distanceKey, directionKey, pos, shape);
         if (cancelled) {
           api.abandonSoloRun(created.id, user.deviceId).catch(() => {});
           return;
@@ -156,20 +165,28 @@ export default function SoloRunScreen({ route, navigation }: Props) {
     setSpeedKmh(last.speedKmh);
     markFix();
     recordSpeed(last.speedKmh);
+    feedTrackTimer(last);
 
     // Before GO the GPS is just warming up -- nothing counts yet.
     if (phaseRef.current !== "running") return;
 
-    mapRef.current?.animateToRegion(
-      { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.006, longitudeDelta: 0.006 },
-      500
-    );
+    camera.follow(pos);
     if (last.speedKmh > maxSpeedRef.current) maxSpeedRef.current = last.speedKmh;
     if (courseRef.current && courseRef.current.length >= 2) {
-      // How far down the course road you are, kept monotonic so GPS wobble
-      // can't take back road you've already driven.
-      const { distanceAlongM } = projectOntoPolyline(courseRef.current, courseCumRef.current, pos);
-      distanceRef.current = Math.max(distanceRef.current, distanceAlongM);
+      // How far round the course you are, fix by fix: never backwards, and
+      // a loop's start can't be mistaken for its finish (they're the same
+      // spot) -- see advanceAlongPolyline.
+      for (const p of points) {
+        const gap = lastFixTRef.current ? p.t - lastFixTRef.current : 1000;
+        lastFixTRef.current = p.t;
+        distanceRef.current = advanceAlongPolyline(
+          courseRef.current,
+          courseCumRef.current,
+          { lat: p.lat, lng: p.lng },
+          distanceRef.current,
+          aheadWindowM(gap)
+        ).distanceAlongM;
+      }
     } else {
       // No road course: progress along the chosen compass direction.
       if (!startPointRef.current) startPointRef.current = { lat: points[0].lat, lng: points[0].lng };
@@ -217,6 +234,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
       setCountdownS(0);
       startedAtRef.current = Date.now();
       distanceRef.current = 0;
+      lastFixTRef.current = 0;
       maxSpeedRef.current = 0;
       startPointRef.current = null;
       go("running");
@@ -262,7 +280,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
 
   const openMenu = () => {
     flushTopSpeed();
-    navigation.push("Home", { busy: { kind: "solo", label: `Solo ${run?.distanceLabel ?? ""} run` } });
+    navigation.push("Home", { busy: { kind: "solo", label: `Solo ${run?.distanceLabel ?? ""} ${isLoop ? "loop" : "run"}` } });
   };
 
   const onClose = () => {
@@ -278,7 +296,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
     navigation.goBack();
   };
 
-  const runAgain = () => navigation.replace("SoloRun", { distanceKey, directionKey });
+  const runAgain = () => navigation.replace("SoloRun", { distanceKey, directionKey, shape });
 
   // ---- render --------------------------------------------------------------
   if (phase === "locating" || phase === "error") {
@@ -287,7 +305,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
         {phase === "locating" ? (
           <>
             <ActivityIndicator color={colors.cyan} size="large" />
-            <Text style={styles.centeredText}>Laying out your course...</Text>
+            <Text style={styles.centeredText}>{isLoop ? "Laying out your loop..." : "Laying out your course..."}</Text>
           </>
         ) : (
           <>
@@ -301,7 +319,9 @@ export default function SoloRunScreen({ route, navigation }: Props) {
 
   const target = targetRef.current || run?.distanceM || 0;
   const progressPct = target > 0 ? Math.min(1, distanceM / target) : 0;
-  const label = `${run?.distanceLabel ?? ""} ${run?.directionLabel ?? ""}`.trim();
+  const label = isLoop
+    ? `${run?.distanceLabel ?? ""} LOOP`.trim()
+    : `${run?.distanceLabel ?? ""} ${run?.directionLabel ?? ""}`.trim();
 
   return (
     <View style={styles.container}>
@@ -310,6 +330,8 @@ export default function SoloRunScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
+        onRegionChange={camera.onRegionChange}
+        onRegionChangeComplete={camera.onRegionChangeComplete}
         initialRegion={
           myPos
             ? { latitude: myPos.lat, longitude: myPos.lng, latitudeDelta: 0.01, longitudeDelta: 0.01 }
@@ -328,7 +350,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
               anchor={{ x: 0.5, y: 0.5 }}
             >
               <View style={styles.finishPin}>
-                <Text style={styles.finishPinText}>FINISH</Text>
+                <Text style={styles.finishPinText}>{isLoop ? "START / FINISH" : "FINISH"}</Text>
               </View>
             </Marker>
           </>
@@ -358,10 +380,16 @@ export default function SoloRunScreen({ route, navigation }: Props) {
       {/* Lined up, waiting for you to go. */}
       {phase === "ready" && (
         <View style={[styles.hud, { top: insets.top + TOP_BUTTON_ROW_H }]}>
-          <Text style={styles.hudLabel}>SOLO RUN</Text>
+          <Text style={styles.hudLabel}>{isLoop ? "SOLO LOOP" : "SOLO RUN"}</Text>
           <Text style={styles.hudTitle}>{label}</Text>
           <Text style={styles.hudHint}>
-            {course
+            {course && isLoop
+              ? `Follow the gold line round and back to where you are now -- heads out ${
+                  run?.directionLabel ?? ""
+                } first. It's ${formatDistanceShort(run?.courseDistanceM ?? 0, units)} of real road${
+                  run && !run.timeEligible ? " -- too far off the distance to count as a time, but still a drive" : ""
+                }.`
+              : course
               ? "Line up at the start of the gold line, then tap START. Your time runs from GO to the FINISH."
               : `No road course could be laid out here -- after GO, just head ${run?.directionLabel ?? "straight"} for the full distance.`}
           </Text>
@@ -412,6 +440,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
               {result.worldRank != null && (
                 <Text style={styles.resultMeta}>
                   #{result.worldRank} in the world at {result.distanceLabel}
+                  {isLoop ? " (loops)" : ""}
                 </Text>
               )}
             </>
@@ -419,7 +448,9 @@ export default function SoloRunScreen({ route, navigation }: Props) {
             <>
               <Text style={styles.resultTimeMuted}>RUN ENDED</Text>
               <Text style={styles.resultMeta}>
-                Stopped short of the finish, so no time this run -- the driving still counts toward your stats.
+                {result.result?.completed && !result.timeEligible
+                  ? "This loop came out too far off the distance to count as a time -- the driving still counts toward your stats."
+                  : "Stopped short of the finish, so no time this run -- the driving still counts toward your stats."}
               </Text>
             </>
           )}
@@ -434,6 +465,10 @@ export default function SoloRunScreen({ route, navigation }: Props) {
             <NeonButton label="DONE" variant="outline" onPress={() => navigation.goBack()} style={styles.actionButton} />
           </View>
         </View>
+      )}
+
+      {(phase === "running" || phase === "ready") && (
+        <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
       )}
 
       {phase === "ready" && (

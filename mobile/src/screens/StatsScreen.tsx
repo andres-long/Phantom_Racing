@@ -8,6 +8,7 @@ import {
   GlobalStatsEntry,
   SoloStatsResponse,
   RaceDistanceKey,
+  SoloShape,
 } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
@@ -38,12 +39,50 @@ const METRICS: { key: GlobalStatsMetric; label: string }[] = [
   { key: "wins", label: "RACE WINS" },
 ];
 
-// Second row: fastest solo run at each distance (lowest time ranks first).
-const TIME_METRICS: { key: GlobalStatsMetric; label: string }[] = [
-  { key: "soloQuarter", label: "1/4 MI TIME" },
-  { key: "soloMile", label: "1 MI TIME" },
-  { key: "soloFive", label: "5 MI TIME" },
-];
+// Below those: fastest solo run at any distance (lowest time ranks first),
+// straight runs and loops on separate boards.
+function timeMetric(shape: SoloShape, key: RaceDistanceKey): GlobalStatsMetric {
+  return shape === "loop" ? `loop:${key}` : `solo:${key}`;
+}
+
+function parseTimeMetric(metric: GlobalStatsMetric): { shape: SoloShape; key: RaceDistanceKey } | null {
+  const legacy: Record<string, RaceDistanceKey> = { soloQuarter: "quarter", soloMile: "mile", soloFive: "five" };
+  if (legacy[metric]) return { shape: "sprint", key: legacy[metric] };
+  const m = /^(solo|loop):(.+)$/.exec(metric);
+  return m ? { shape: m[1] === "loop" ? "loop" : "sprint", key: m[2] as RaceDistanceKey } : null;
+}
+
+// A racer's best time for a board, from the per-distance map (with the
+// original three fields as a fallback for an older backend).
+function bestTimeMs(e: GlobalStatsEntry, shape: SoloShape, key: RaceDistanceKey): number | null {
+  const k = shape === "loop" ? `${key}:loop` : key;
+  const v = e.soloBestsMs?.[k];
+  if (v != null) return v;
+  if (shape === "sprint") {
+    if (key === "quarter") return e.soloQuarterMs;
+    if (key === "mile") return e.soloMileMs;
+    if (key === "five") return e.soloFiveMs;
+  }
+  return null;
+}
+
+function ShapeSwitch({ shape, onChange }: { shape: SoloShape; onChange: (s: SoloShape) => void }) {
+  return (
+    <View style={styles.shapeSwitch}>
+      {(["sprint", "loop"] as SoloShape[]).map((sh) => (
+        <Pressable
+          key={sh}
+          style={[styles.shapeOption, shape === sh && styles.shapeOptionActive]}
+          onPress={() => onChange(sh)}
+        >
+          <Text style={[styles.shapeText, shape === sh && styles.shapeTextActive]}>
+            {sh === "loop" ? "LOOP" : "STRAIGHT"}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
 
 // Two views of the same numbers. MINE: your lifetime totals across
 // everything you've driven -- segment runs (racing a track), Go To trips
@@ -81,6 +120,7 @@ function MyStats() {
   const { user, units } = useUser();
   const [totals, setTotals] = useState<Totals | null>(null);
   const [solo, setSolo] = useState<SoloStatsResponse | null>(null);
+  const [bestShape, setBestShape] = useState<SoloShape>("sprint");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -171,11 +211,14 @@ function MyStats() {
             <Text style={styles.tileValue}>{displaySpeedKmh(totals.avgSpeedKmh, units)}</Text>
             <Text style={styles.tileUnit}>{speedUnit(units)}</Text>
           </View>
-          {/* Personal bests from solo runs, one line per distance. */}
+          {/* Personal bests from solo runs, one line per distance --
+              straight runs and loops kept apart. */}
           <View style={styles.tile}>
             <Text style={styles.tileLabel}>BEST SOLO RUNS</Text>
+            <ShapeSwitch shape={bestShape} onChange={setBestShape} />
             {RACE_DISTANCES.map((d) => {
-              const best = solo?.bests[d.key as RaceDistanceKey] ?? null;
+              const bests = bestShape === "loop" ? solo?.loopBests : solo?.bests;
+              const best = bests?.[d.key as RaceDistanceKey] ?? null;
               return (
                 <View key={d.key} style={styles.bestRow}>
                   <Text style={styles.bestLabel}>{d.label}</Text>
@@ -215,6 +258,10 @@ function MyStats() {
 function WorldStats() {
   const { user, units } = useUser();
   const [metric, setMetric] = useState<GlobalStatsMetric>("topSpeed");
+  // The time boards: which shape, and the distance last looked at.
+  const [timeShape, setTimeShape] = useState<SoloShape>("sprint");
+  const [timeKey, setTimeKey] = useState<RaceDistanceKey>("quarter");
+  const timeBoard = parseTimeMetric(metric);
   const [data, setData] = useState<GlobalStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -246,9 +293,10 @@ function WorldStats() {
     if (metric === "topSpeed") return `${displaySpeedKmh(e.topSpeedKmh, units)} ${speedUnit(units)}`;
     if (metric === "avgSpeed") return `${displaySpeedKmh(e.avgSpeedKmh, units)} ${speedUnit(units)}`;
     if (metric === "wins") return `${e.raceWins} of ${e.raceCount}`;
-    if (metric === "soloQuarter") return e.soloQuarterMs != null ? formatDuration(e.soloQuarterMs) : "--";
-    if (metric === "soloMile") return e.soloMileMs != null ? formatDuration(e.soloMileMs) : "--";
-    if (metric === "soloFive") return e.soloFiveMs != null ? formatDuration(e.soloFiveMs) : "--";
+    if (timeBoard) {
+      const ms = bestTimeMs(e, timeBoard.shape, timeBoard.key);
+      return ms != null ? formatDuration(ms) : "--";
+    }
     return formatDistanceShort(e.distanceM, units);
   };
 
@@ -256,24 +304,55 @@ function WorldStats() {
 
   return (
     <View style={{ flex: 1 }}>
-      {[METRICS, TIME_METRICS].map((row, i) => (
-        <View key={i} style={styles.metricRow}>
-          {row.map((m) => {
-            const active = m.key === metric;
-            return (
-              <Pressable
-                key={m.key}
-                style={[styles.metricButton, active && styles.metricButtonActive]}
-                onPress={() => setMetric(m.key)}
-              >
-                <Text style={[styles.metricText, active && styles.metricTextActive]} numberOfLines={1}>
-                  {m.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      ))}
+      <View style={styles.metricRow}>
+        {METRICS.map((m) => {
+          const active = m.key === metric;
+          return (
+            <Pressable
+              key={m.key}
+              style={[styles.metricButton, active && styles.metricButtonActive]}
+              onPress={() => setMetric(m.key)}
+            >
+              <Text style={[styles.metricText, active && styles.metricTextActive]} numberOfLines={1}>
+                {m.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {/* Fastest times: straight runs or loops, at any distance. */}
+      <View style={[styles.metricRow, { alignItems: "center" }]}>
+        <Text style={styles.timesLabel}>TIMES</Text>
+        <ShapeSwitch
+          shape={timeShape}
+          onChange={(sh) => {
+            setTimeShape(sh);
+            setMetric(timeMetric(sh, timeBoard?.key ?? timeKey));
+          }}
+        />
+      </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.distanceScroll}
+        contentContainerStyle={styles.distanceScrollContent}
+      >
+        {RACE_DISTANCES.map((d) => {
+          const active = !!timeBoard && timeBoard.key === d.key && timeBoard.shape === timeShape;
+          return (
+            <Pressable
+              key={d.key}
+              style={[styles.distanceChip, active && styles.metricButtonActive]}
+              onPress={() => {
+                setTimeKey(d.key);
+                setMetric(timeMetric(timeShape, d.key));
+              }}
+            >
+              <Text style={[styles.metricText, active && styles.metricTextActive]}>{d.short}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
 
       <ScrollView
         contentContainerStyle={styles.content}
@@ -297,8 +376,10 @@ function WorldStats() {
             ))}
             <Text style={styles.footnote}>
               {data.totalRacers} racer{data.totalRacers === 1 ? "" : "s"} ranked worldwide
-              {metric === "soloQuarter" || metric === "soloMile" || metric === "soloFive"
-                ? " -- each racer's fastest solo run at this distance"
+              {timeBoard
+                ? ` -- each racer's fastest solo ${timeBoard.shape === "loop" ? "loop" : "run"} at ${
+                    RACE_DISTANCES.find((d) => d.key === timeBoard.key)?.label ?? "this distance"
+                  }`
                 : metric === "wins"
                 ? " -- head-to-head races won, out of races finished"
                 : data.minDistanceM > 0
@@ -363,6 +444,28 @@ const styles = StyleSheet.create({
   tabButtonText: { color: colors.textSecondary, fontFamily: fonts.heading, fontSize: 13, letterSpacing: 1.5 },
   tabButtonTextActive: { color: colors.cyan },
   metricRow: { flexDirection: "row", gap: 8, paddingHorizontal: 20, paddingTop: 10 },
+  timesLabel: { color: colors.textMuted, fontFamily: fonts.heading, fontSize: 11, letterSpacing: 1.5, marginRight: 4 },
+  shapeSwitch: { flexDirection: "row", gap: 6, marginTop: 8 },
+  shapeOption: {
+    borderWidth: 1,
+    borderColor: colors.panelBorder,
+    borderRadius: 14,
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+  },
+  shapeOptionActive: { borderColor: colors.gold, backgroundColor: "rgba(255, 207, 61, 0.12)" },
+  shapeText: { color: colors.textSecondary, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
+  shapeTextActive: { color: colors.gold },
+  distanceScroll: { flexGrow: 0, marginTop: 8 },
+  distanceScrollContent: { paddingHorizontal: 20, gap: 8 },
+  distanceChip: {
+    borderWidth: 1,
+    borderColor: colors.panelBorder,
+    borderRadius: 16,
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    alignItems: "center",
+  },
   bestRow: { flexDirection: "row", justifyContent: "space-between", alignSelf: "stretch", marginTop: 10 },
   bestLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: "700", letterSpacing: 1 },
   bestTime: { color: colors.gold, fontFamily: fonts.display, fontSize: 18 },

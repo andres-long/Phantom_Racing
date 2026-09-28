@@ -22,6 +22,8 @@ import StatsScreen from "../screens/StatsScreen";
 import RaceLiveScreen from "../screens/RaceLiveScreen";
 import RaceResultScreen from "../screens/RaceResultScreen";
 import SoloRunScreen from "../screens/SoloRunScreen";
+import TrackTimerToast from "../components/TrackTimerToast";
+import { navigationRef } from "./navigationRef";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -70,7 +72,7 @@ export default function AppNavigator() {
     // shared app-wide rather than something each screen sets up itself. It
     // no-ops (no mic, no connections) until a user is actually signed in.
     <ProximityVoiceProvider>
-      <NavigationContainer theme={navTheme}>
+      <NavigationContainer ref={navigationRef} theme={navTheme}>
         <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!welcomeSeen ? (
           <Stack.Screen name="Welcome" component={WelcomeScreen} />
@@ -119,6 +121,8 @@ export default function AppNavigator() {
         )}
       </Stack.Navigator>
       </NavigationContainer>
+      {/* Times you through any track you drive, whatever screen is up. */}
+      <TrackTimerToast />
     </ProximityVoiceProvider>
   );
 }

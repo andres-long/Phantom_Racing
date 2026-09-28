@@ -32,10 +32,19 @@ const GOOGLE_SERVER_API_KEY = process.env.GOOGLE_SERVER_API_KEY;
 // classic drag-race lengths the user asked for. Kept as a name->meters map
 // (not user-editable) so both server and client always agree on exactly what
 // "1 MILE" means -- mirrored client-side in mobile/src/raceDistances.ts.
+const MILE_M = 1609.344;
 const RACE_DISTANCES = {
   quarter: { meters: 402.336, label: "1/4 MILE" },
-  mile: { meters: 1609.344, label: "1 MILE" },
-  five: { meters: 8046.72, label: "5 MILES" },
+  mile: { meters: MILE_M, label: "1 MILE" },
+  five: { meters: 5 * MILE_M, label: "5 MILES" },
+  // Long hauls, for races and solo runs alike.
+  m10: { meters: 10 * MILE_M, label: "10 MILES" },
+  m20: { meters: 20 * MILE_M, label: "20 MILES" },
+  m50: { meters: 50 * MILE_M, label: "50 MILES" },
+  m80: { meters: 80 * MILE_M, label: "80 MILES" },
+  m100: { meters: 100 * MILE_M, label: "100 MILES" },
+  m150: { meters: 150 * MILE_M, label: "150 MILES" },
+  m200: { meters: 200 * MILE_M, label: "200 MILES" },
 };
 // A race request left unanswered this long is treated as expired -- the two
 // racers are physically near each other right now, so a request that sits
@@ -233,6 +242,60 @@ function isImplausibleRun(avgSpeedKmh, maxSpeedKmh) {
 // decides whether that should fail the whole request (submitting a run:
 // yes) or just be reported alongside an otherwise-successful save
 // (creating a segment: no -- the segment is kept either way).
+// Each track is split into four sectors at 25/50/75% of its length -- the
+// checkpoints. A run's splits are its elapsed time at each checkpoint and at
+// the finish, read off the same distance-vs-time profile the ghost uses, so
+// any run ever stored can be split after the fact.
+const CHECKPOINT_FRACTIONS = [0.25, 0.5, 0.75, 1];
+
+function splitsFromProfile(profile, lengthM, durationMs) {
+  return CHECKPOINT_FRACTIONS.map((f, i) =>
+    i === CHECKPOINT_FRACTIONS.length - 1
+      ? durationMs
+      : Math.round(geo.ghostElapsedAtDistance(profile, f * lengthM) ?? 0)
+  );
+}
+
+function runSplits(segment, cumDist, run) {
+  if (Array.isArray(run.splitsMs) && run.splitsMs.length === CHECKPOINT_FRACTIONS.length) return run.splitsMs;
+  if (!Array.isArray(run.trace) || run.trace.length < 2) return null;
+  const profile = geo.buildGhostProfile(segment.points, cumDist, run.trace);
+  return splitsFromProfile(profile, cumDist[cumDist.length - 1], run.durationMs);
+}
+
+function sectorsFromSplits(splits) {
+  return splits.map((t, i) => (i === 0 ? t : t - splits[i - 1]));
+}
+
+// The fastest time through each sector across every run on the track, and
+// the fastest time to reach each checkpoint, with who set them.
+function sectorRecords(state, segment) {
+  const cumDist = geo.cumulativeDistances(segment.points);
+  const n = CHECKPOINT_FRACTIONS.length;
+  const sector = Array.from({ length: n }, () => null);
+  const split = Array.from({ length: n }, () => null);
+  for (const run of state.runs) {
+    if (run.segmentId !== segment.id) continue;
+    const splits = runSplits(segment, cumDist, run);
+    if (!splits) continue;
+    const sectors = sectorsFromSplits(splits);
+    for (let i = 0; i < n; i++) {
+      if (sectors[i] > 0 && (!sector[i] || sectors[i] < sector[i].ms)) sector[i] = { ms: sectors[i], userId: run.userId };
+      if (splits[i] > 0 && (!split[i] || splits[i] < split[i].ms)) split[i] = { ms: splits[i], userId: run.userId };
+    }
+  }
+  const nameOf = (id) => state.users.find((u) => u.id === id)?.displayName ?? "Unknown";
+  return CHECKPOINT_FRACTIONS.map((fraction, i) => ({
+    index: i + 1,
+    fraction,
+    distanceM: Math.round(fraction * cumDist[cumDist.length - 1]),
+    bestSectorMs: sector[i] ? sector[i].ms : null,
+    bestSectorBy: sector[i] ? nameOf(sector[i].userId) : null,
+    bestSplitMs: split[i] ? split[i].ms : null,
+    bestSplitBy: split[i] ? nameOf(split[i].userId) : null,
+  }));
+}
+
 function tryCreateRun(state, segment, user, cleanTrace, maxSpeedKmh) {
   const segCumDist = geo.cumulativeDistances(segment.points);
   const validation = geo.validateRunAgainstSegment(segment.points, segCumDist, cleanTrace);
@@ -262,6 +325,11 @@ function tryCreateRun(state, segment, user, cleanTrace, maxSpeedKmh) {
     };
   }
 
+  // Sector records as they stood before this run, to say which it beat.
+  const before = sectorRecords(state, segment);
+  const splitsMs = splitsFromProfile(validation.profile, segCumDist[segCumDist.length - 1], durationMs);
+  const sectorsMs = sectorsFromSplits(splitsMs);
+
   const run = {
     id: db.id("run"),
     segmentId: segment.id,
@@ -269,6 +337,7 @@ function tryCreateRun(state, segment, user, cleanTrace, maxSpeedKmh) {
     durationMs,
     avgSpeedKmh: roundedAvg,
     maxSpeedKmh: safeMaxSpeedKmh,
+    splitsMs,
     trace: cleanTrace,
     recordedAt: new Date().toISOString(),
   };
@@ -288,6 +357,12 @@ function tryCreateRun(state, segment, user, cleanTrace, maxSpeedKmh) {
       rank,
       totalRuns: allRuns.length,
       isNewRecord: rank === 1,
+      // Checkpoint splits (elapsed at 25/50/75/100%) and each sector's time,
+      // with the record it was up against and whether this run beat it.
+      splitsMs,
+      sectorsMs,
+      sectorRecordsMs: before.map((c) => c.bestSectorMs),
+      sectorIsRecord: sectorsMs.map((t, i) => before[i].bestSectorMs == null || t < before[i].bestSectorMs),
     },
     error: null,
   };
@@ -408,6 +483,62 @@ async function buildRaceCourse(start, bearingDeg, targetM) {
     distanceM: Math.round(cut.distanceM),
     createdAt: new Date().toISOString(),
   };
+}
+
+// A closed course: out along the chosen bearing, across, and back round to
+// where you started -- a triangle of waypoints Google turns into real roads.
+// Roads wind, so the first guess at the triangle's size is corrected once
+// or twice against the length Google actually comes back with. A loop is
+// never cut short (it has to close), so its length lands near the chosen
+// distance rather than exactly on it; runs only go down as times when it's
+// within LOOP_TOLERANCE of it (see timeEligible).
+const LOOP_TOLERANCE = 0.12;
+
+async function buildLoopCourse(start, bearingDeg, targetM) {
+  let side = targetM / 3 / 1.3;
+  let best = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const b = destinationPoint(start, bearingDeg, side);
+    const c = destinationPoint(start, bearingDeg + 60, side);
+    let route;
+    try {
+      route = await requestDrivingRoute(start, start, [b, c]);
+    } catch (e) {
+      // A corner in the sea or the middle of nowhere: try a tighter loop.
+      if (!e.noRoute) throw e;
+      side *= 0.6;
+      continue;
+    }
+    const len = geo.polylineLength(route.points);
+    if (!best || Math.abs(len - targetM) < Math.abs(best.len - targetM)) best = { points: route.points, len };
+    if (Math.abs(len - targetM) <= targetM * 0.05) break;
+    side = (side * targetM) / Math.max(len, 1);
+  }
+  if (!best || best.points.length < 2 || best.len < targetM * 0.5) return null;
+  return {
+    points: best.points,
+    distanceM: Math.round(best.len),
+    shape: "loop",
+    createdAt: new Date().toISOString(),
+  };
+}
+
+// Whether a solo run on this course can go down as a time at its distance:
+// the course has to be (close to) the distance you picked. A straight course
+// that ran out of road, or a loop that came out much longer or shorter than
+// asked, still counts as driving -- just not on the time boards.
+function soloTimeEligible(run) {
+  if (!run.course) return true;
+  const nominal = RACE_DISTANCES[run.distanceKey] ? RACE_DISTANCES[run.distanceKey].meters : 0;
+  if (!(nominal > 0)) return false;
+  if ((run.shape || "sprint") === "loop") return Math.abs(run.course.distanceM - nominal) <= nominal * LOOP_TOLERANCE;
+  return run.course.distanceM >= nominal * 0.97;
+}
+
+// Personal bests and world boards are kept per distance and per shape; a
+// loop's key gets a ":loop" suffix.
+function soloBestKey(distanceKey, shape) {
+  return shape === "loop" ? `${distanceKey}:loop` : distanceKey;
 }
 
 // A finished racer's own side of a race, normalized for the client.
@@ -720,6 +851,16 @@ route("GET", "/api/segments/:id", async ({ res, params, query }) => {
     return sendJson(res, 404, { error: "Segment not found" });
   }
   sendJson(res, 200, segmentSummary(state, segment));
+});
+
+// A track's four checkpoints, with the sector records and fastest splits.
+route("GET", "/api/segments/:id/checkpoints", async ({ res, params, query }) => {
+  const state = await db.load();
+  const segment = state.segments.find((s) => s.id === params.id);
+  if (!segment || !canAccessSegment(state, segment, query.get("deviceId"))) {
+    return sendJson(res, 404, { error: "Segment not found" });
+  }
+  sendJson(res, 200, { segmentId: segment.id, checkpoints: sectorRecords(state, segment) });
 });
 
 route("GET", "/api/segments/:id/leaderboard", async ({ res, params, query }) => {
@@ -1056,11 +1197,14 @@ route("GET", "/api/places/details", async ({ res, query }) => {
 // One driving route between two points, straight from Google. Shared by
 // the "Go To a place" route below and by race-course building, so there's
 // one place that knows the request shape and the failure cases.
-async function requestDrivingRoute(origin, destination) {
+async function requestDrivingRoute(origin, destination, waypoints = []) {
   if (!GOOGLE_SERVER_API_KEY) throw new Error("Routing isn't configured on the server yet.");
+  const via = waypoints.length
+    ? `&waypoints=${waypoints.map((p) => `${p.lat},${p.lng}`).join("%7C")}`
+    : "";
   const url =
     `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.lat},${origin.lng}` +
-    `&destination=${destination.lat},${destination.lng}&mode=driving&key=${GOOGLE_SERVER_API_KEY}`;
+    `&destination=${destination.lat},${destination.lng}${via}&mode=driving&key=${GOOGLE_SERVER_API_KEY}`;
   const data = await httpsGetJson(url);
   if (data.status !== "OK" || !data.routes || !data.routes.length) {
     const err = new Error(data.error_message || `No route found (${data.status})`);
@@ -1068,13 +1212,16 @@ async function requestDrivingRoute(origin, destination) {
     throw err;
   }
   const route0 = data.routes[0];
-  const leg = route0.legs[0];
+  const legs = route0.legs || [];
+  const leg = legs[0];
+  const lastLeg = legs[legs.length - 1];
   return {
     points: geo.decodePolyline(route0.overview_polyline.points),
-    distanceM: leg.distance.value,
-    durationS: leg.duration.value,
-    durationInTrafficS: leg.duration_in_traffic ? leg.duration_in_traffic.value : null,
-    endAddress: leg.end_address,
+    // A route through waypoints has one leg per stop; the trip is all of them.
+    distanceM: legs.reduce((sum, l) => sum + l.distance.value, 0),
+    durationS: legs.reduce((sum, l) => sum + l.duration.value, 0),
+    durationInTrafficS: legs.length === 1 && leg.duration_in_traffic ? leg.duration_in_traffic.value : null,
+    endAddress: lastLeg.end_address,
   };
 }
 
@@ -1207,7 +1354,15 @@ const GLOBAL_STATS_LIMIT = 50;
 const GLOBAL_AVG_MIN_DISTANCE_M = 1000;
 const GLOBAL_STATS_METRICS = ["topSpeed", "distance", "avgSpeed", "wins", "soloQuarter", "soloMile", "soloFive"];
 // Fastest-time boards: best completed solo run per racer at one distance.
+// `solo:<distanceKey>` for straight runs, `loop:<distanceKey>` for loops;
+// the three original names still work.
 const SOLO_METRIC_DISTANCE = { soloQuarter: "quarter", soloMile: "mile", soloFive: "five" };
+function parseSoloMetric(metric) {
+  if (SOLO_METRIC_DISTANCE[metric]) return { key: SOLO_METRIC_DISTANCE[metric], shape: "sprint" };
+  const m = /^(solo|loop):([a-z0-9]+)$/i.exec(metric || "");
+  if (m && RACE_DISTANCES[m[2]]) return { key: m[2], shape: m[1] === "loop" ? "loop" : "sprint" };
+  return null;
+}
 
 function computeGlobalStats(state) {
   const byUser = new Map();
@@ -1274,10 +1429,11 @@ function computeGlobalStats(state) {
     const r = run.result;
     if (isImplausibleRun(r.avgSpeedKmh, r.maxSpeedKmh)) continue;
     add(run.userId, r.distanceM ?? 0, r.durationMs, r.maxSpeedKmh);
-    if (!r.completed) continue;
+    if (!r.completed || !soloTimeEligible(run)) continue;
     const s = ensure(run.userId);
-    const cur = s.soloBestMs[run.distanceKey];
-    if (cur == null || r.durationMs < cur) s.soloBestMs[run.distanceKey] = r.durationMs;
+    const bestKey = soloBestKey(run.distanceKey, run.shape || "sprint");
+    const cur = s.soloBestMs[bestKey];
+    if (cur == null || r.durationMs < cur) s.soloBestMs[bestKey] = r.durationMs;
   }
 
   const entries = [];
@@ -1296,6 +1452,8 @@ function computeGlobalStats(state) {
       soloQuarterMs: s.soloBestMs.quarter ?? null,
       soloMileMs: s.soloBestMs.mile ?? null,
       soloFiveMs: s.soloBestMs.five ?? null,
+      // Every distance and shape, keyed like soloBestKey.
+      soloBestsMs: { ...s.soloBestMs },
     });
   }
   return entries;
@@ -1303,15 +1461,16 @@ function computeGlobalStats(state) {
 
 route("GET", "/api/stats/global", async ({ res, query }) => {
   const requested = query.get("metric");
-  const metric = GLOBAL_STATS_METRICS.includes(requested) ? requested : "topSpeed";
+  const metric = GLOBAL_STATS_METRICS.includes(requested) || parseSoloMetric(requested) ? requested : "topSpeed";
   const deviceId = query.get("deviceId");
   const state = await db.load();
   const me = deviceId ? findUserByDevice(state, deviceId) : null;
 
-  const soloKey = SOLO_METRIC_DISTANCE[metric];
+  const soloMetric = parseSoloMetric(metric);
+  const soloKey = soloMetric ? soloBestKey(soloMetric.key, soloMetric.shape) : null;
   const valueOf = (e) =>
     soloKey
-      ? e[`solo${soloKey[0].toUpperCase()}${soloKey.slice(1)}Ms`]
+      ? e.soloBestsMs[soloKey] ?? null
       : metric === "topSpeed"
       ? e.topSpeedKmh
       : metric === "distance"
@@ -1733,6 +1892,8 @@ function soloSummary(run, { includeCourse = false } = {}) {
     directionBearing: RACE_DIRECTIONS[dirKey].bearing,
     courseDistanceM: run.course ? run.course.distanceM : null,
     course: includeCourse && run.course ? run.course.points : null,
+    shape: run.shape || "sprint",
+    timeEligible: soloTimeEligible(run),
     status: run.status,
     createdAt: run.createdAt,
     result: run.result || null,
@@ -1740,11 +1901,12 @@ function soloSummary(run, { includeCourse = false } = {}) {
 }
 
 // A user's fastest completed time at one distance, or null.
-function bestSoloResult(state, userId, distanceKey, excludeRunId) {
+function bestSoloResult(state, userId, distanceKey, excludeRunId, shape = "sprint") {
   let best = null;
   for (const r of state.soloRuns || []) {
     if (r.userId !== userId || r.distanceKey !== distanceKey || r.id === excludeRunId) continue;
-    if (r.status !== "finished" || !r.result || !r.result.completed) continue;
+    if ((r.shape || "sprint") !== shape) continue;
+    if (r.status !== "finished" || !r.result || !r.result.completed || !soloTimeEligible(r)) continue;
     if (isImplausibleRun(r.result.avgSpeedKmh, r.result.maxSpeedKmh)) continue;
     if (!best || r.result.durationMs < best.durationMs) best = r.result;
   }
@@ -1760,6 +1922,7 @@ route("POST", "/api/solo", async ({ res, body }) => {
   const directionKey = RACE_DIRECTIONS[body.directionKey] ? body.directionKey : DEFAULT_RACE_DIRECTION;
   const lat = Number(body.lat);
   const lng = Number(body.lng);
+  const shape = body.shape === "loop" ? "loop" : "sprint";
 
   const state = await db.load();
   const me = findUserByDevice(state, deviceId);
@@ -1768,14 +1931,20 @@ route("POST", "/api/solo", async ({ res, body }) => {
   let course = null;
   if (Number.isFinite(lat) && Number.isFinite(lng)) {
     try {
-      course = await buildRaceCourse(
-        { lat, lng },
-        RACE_DIRECTIONS[directionKey].bearing,
-        RACE_DISTANCES[distanceKey].meters
-      );
+      course =
+        shape === "loop"
+          ? await buildLoopCourse({ lat, lng }, RACE_DIRECTIONS[directionKey].bearing, RACE_DISTANCES[distanceKey].meters)
+          : await buildRaceCourse({ lat, lng }, RACE_DIRECTIONS[directionKey].bearing, RACE_DISTANCES[distanceKey].meters);
     } catch (e) {
       course = null;
     }
+  }
+  // A straight run can fall back to "just head that way"; a loop can't --
+  // without roads that come back round, there's no loop to drive.
+  if (shape === "loop" && !course) {
+    return sendJson(res, 422, {
+      error: "Couldn't lay out a loop from here -- try another direction or a straight run.",
+    });
   }
 
   // One run at a time: any earlier run of yours that never finished (you
@@ -1786,6 +1955,7 @@ route("POST", "/api/solo", async ({ res, body }) => {
     userId: me.id,
     distanceKey,
     directionKey,
+    shape,
     course,
     status: "ready",
     createdAt: new Date().toISOString(),
@@ -1815,7 +1985,8 @@ route("POST", "/api/solo/:id/finish", async ({ res, params, body }) => {
 
   const target = run.course ? run.course.distanceM : RACE_DISTANCES[run.distanceKey].meters;
   const completed = Number.isFinite(distanceM) ? distanceM >= target * 0.99 : false;
-  const previousBest = bestSoloResult(state, me.id, run.distanceKey, run.id);
+  const shape = run.shape || "sprint";
+  const previousBest = bestSoloResult(state, me.id, run.distanceKey, run.id, shape);
 
   run.result = buildRaceResult({
     durationMs,
@@ -1829,7 +2000,8 @@ route("POST", "/api/solo/:id/finish", async ({ res, params, body }) => {
   run.finishedAt = new Date().toISOString();
   await db.save(state);
 
-  const counts = completed && !isImplausibleRun(run.result.avgSpeedKmh, run.result.maxSpeedKmh);
+  const counts =
+    completed && soloTimeEligible(run) && !isImplausibleRun(run.result.avgSpeedKmh, run.result.maxSpeedKmh);
   const isPersonalBest = counts && (!previousBest || run.result.durationMs < previousBest.durationMs);
 
   // Where this time sits worldwide at this distance (everyone's best).
@@ -1838,6 +2010,7 @@ route("POST", "/api/solo/:id/finish", async ({ res, params, body }) => {
     const bests = new Map();
     for (const r of state.soloRuns) {
       if (r.distanceKey !== run.distanceKey || r.status !== "finished" || !r.result || !r.result.completed) continue;
+      if ((r.shape || "sprint") !== shape || !soloTimeEligible(r)) continue;
       if (isImplausibleRun(r.result.avgSpeedKmh, r.result.maxSpeedKmh)) continue;
       const cur = bests.get(r.userId);
       if (cur == null || r.result.durationMs < cur) bests.set(r.userId, r.result.durationMs);
@@ -1875,11 +2048,12 @@ route("GET", "/api/users/:deviceId/solo", async ({ res, params }) => {
   const user = findUserByDevice(state, params.deviceId);
   if (!user) return sendJson(res, 404, { error: "User not found" });
   const bests = {};
+  const loopBests = {};
+  const view = (b) =>
+    b ? { durationMs: b.durationMs, avgSpeedKmh: b.avgSpeedKmh, maxSpeedKmh: b.maxSpeedKmh, finishedAt: b.finishedAt } : null;
   for (const key of Object.keys(RACE_DISTANCES)) {
-    const b = bestSoloResult(state, user.id, key);
-    bests[key] = b
-      ? { durationMs: b.durationMs, avgSpeedKmh: b.avgSpeedKmh, maxSpeedKmh: b.maxSpeedKmh, finishedAt: b.finishedAt }
-      : null;
+    bests[key] = view(bestSoloResult(state, user.id, key, null, "sprint"));
+    loopBests[key] = view(bestSoloResult(state, user.id, key, null, "loop"));
   }
   const runs = (state.soloRuns || [])
     .filter((r) => r.userId === user.id && r.status === "finished" && r.result)
@@ -1894,9 +2068,10 @@ route("GET", "/api/users/:deviceId/solo", async ({ res, params }) => {
       avgSpeedKmh: r.result.avgSpeedKmh,
       maxSpeedKmh: r.result.maxSpeedKmh,
       completed: r.result.completed,
+      shape: r.shape || "sprint",
       recordedAt: r.finishedAt,
     }));
-  sendJson(res, 200, { bests, runs });
+  sendJson(res, 200, { bests, loopBests, runs });
 });
 
 // "Clear whatever's open between us and let me challenge them again." The

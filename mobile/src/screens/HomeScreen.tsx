@@ -12,6 +12,7 @@ import {
   PresenceUser,
   MapBounds,
   RaceDistanceKey,
+  SoloShape,
   RaceDirectionKey,
   RaceChallenge,
   BusyDrive,
@@ -19,7 +20,7 @@ import {
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
-import { cumulativeDistances, projectOntoPolyline, pointAtDistance, haversine } from "../utils/geo";
+import { cumulativeDistances, projectOntoPolyline, pointAtDistance } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort, formatDistanceLong } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -28,6 +29,9 @@ import { RACE_DIRECTIONS } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { cleanSpeedKmh, useStaleSpeedReset } from "../utils/speed";
 import NeonButton from "../components/NeonButton";
+import ZoomControls from "../components/ZoomControls";
+import { useFollowCamera } from "../hooks/useFollowCamera";
+import { feedTrackTimer } from "../trackTimer";
 import VehicleMarker from "../components/VehicleMarker";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
@@ -37,12 +41,9 @@ type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 // about to drive" without cluttering the map with the whole city.
 const NEARBY_RADIUS_M = 5000;
 
-// Auto-detect racing: if you're moving at least this fast, you're clearly
-// driving (not walking or stopped), and if you're within this many meters
-// of a track's start line at that moment, jump straight into timing that
-// track -- no need to open its card and tap "Race it" first.
-const AUTO_START_SPEED_KMH = 15;
-const AUTO_START_RADIUS_M = 45;
+// Driving through a track times you automatically, in the background --
+// see trackTimer.ts (fed from the location watcher below) and the
+// TrackTimerToast that shows it. No jumping to another screen.
 
 const FALLBACK_REGION: Region = {
   latitude: 14.6349,
@@ -129,6 +130,7 @@ export default function HomeScreen({ navigation, route }: Props) {
   const focusCountRef = useRef(0);
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
+  const camera = useFollowCamera(mapRef);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
 
   const [segments, setSegments] = useState<SegmentSummary[]>([]);
@@ -171,8 +173,9 @@ export default function HomeScreen({ navigation, route }: Props) {
   // there's more than one to choose between.
   const [pickingRacer, setPickingRacer] = useState(false);
   // Solo run picker: distance, then direction, then off to SoloRunScreen.
-  const [soloStep, setSoloStep] = useState<"closed" | "distance" | "direction">("closed");
+  const [soloStep, setSoloStep] = useState<"closed" | "distance" | "shape" | "direction">("closed");
   const [soloDistanceKey, setSoloDistanceKey] = useState<RaceDistanceKey | null>(null);
+  const [soloShape, setSoloShape] = useState<SoloShape>("sprint");
 
   // Whether the map should keep recentering on you as you move. On by
   // default (that's the whole point of this fix -- your position marker
@@ -294,7 +297,6 @@ export default function HomeScreen({ navigation, route }: Props) {
         focusCountRef.current > 1 ? setTimeout(() => setOverlayEpoch((n) => n + 1), 300) : null;
       loadSegments();
       let cancelled = false;
-      let autoStarted = false;
 
       // `live` is false for the cached last-known fix we show immediately --
       // its speed is stale, so it must not drive the speed HUD or trigger
@@ -314,12 +316,8 @@ export default function HomeScreen({ navigation, route }: Props) {
         reportPosition(pos, validHeading);
 
         if (followRef.current) {
-          // Tighter than the old 0.02 so turns on small roads/blocks
-          // are easier to spot while driving.
-          mapRef.current?.animateToRegion(
-            { latitude: pos.lat, longitude: pos.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
-            500
-          );
+          // Street level, at whatever zoom you've set (+/- or pinch).
+          camera.follow(pos);
         }
 
         if (!live) return;
@@ -330,20 +328,8 @@ export default function HomeScreen({ navigation, route }: Props) {
         // Your top speed counts whenever the app is open, not just during a
         // recorded drive -- this is the "just driving around" case.
         recordSpeed(currentSpeedKmh);
-
-        // Guarded to fire at most once per visit to this screen, so it
-        // can't re-trigger every second while sitting still right at a
-        // start line -- only an actual approach at driving speed counts.
-        // Never while something else is already recording underneath.
-        if (!busyRef.current && !autoStarted && currentSpeedKmh >= AUTO_START_SPEED_KMH) {
-          const candidate = nearbyRef.current.find(
-            (s) => s.points.length >= 2 && haversine(pos, s.points[0]) <= AUTO_START_RADIUS_M
-          );
-          if (candidate) {
-            autoStarted = true;
-            navigation.navigate("RecordRun", { segmentId: candidate.id, autoStart: true });
-          }
-        }
+        // Rolling through a track's start times you along it, silently.
+        feedTrackTimer({ lat: pos.lat, lng: pos.lng, t: loc.timestamp || Date.now(), speedKmh: currentSpeedKmh });
       };
 
       (async () => {
@@ -564,10 +550,7 @@ export default function HomeScreen({ navigation, route }: Props) {
   const recenter = () => {
     if (!userPos) return;
     followRef.current = true;
-    mapRef.current?.animateToRegion(
-      { latitude: userPos.lat, longitude: userPos.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
-      400
-    );
+    camera.follow(userPos, 400, true);
   };
 
   // Arrived here from a recording screen by tapping a racer: once they're
@@ -738,12 +721,7 @@ export default function HomeScreen({ navigation, route }: Props) {
           // permission prompt was up on first launch), jump to it now --
           // the watcher only fires again after you move ~5m.
           const pos = latestPosRef.current;
-          if (pos && followRef.current) {
-            mapRef.current?.animateToRegion(
-              { latitude: pos.coords.lat, longitude: pos.coords.lng, latitudeDelta: 0.008, longitudeDelta: 0.008 },
-              300
-            );
-          }
+          if (pos && followRef.current) camera.follow(pos.coords, 300, true);
         }}
         onPress={() => {
           setSelectedId(null);
@@ -754,7 +732,10 @@ export default function HomeScreen({ navigation, route }: Props) {
         onPanDrag={() => {
           followRef.current = false;
         }}
-        onRegionChangeComplete={(region) => {
+        onRegionChange={camera.onRegionChange}
+        onRegionChangeComplete={(region, details) => {
+          // A pinch sets the zoom the follow camera keeps.
+          camera.onRegionChangeComplete(region, details);
           regionRef.current = region;
           // Refresh right away on top of the periodic tick, so panning to a
           // new area shows who's there without waiting up to
@@ -844,6 +825,25 @@ export default function HomeScreen({ navigation, route }: Props) {
                   </View>
                 </Marker>
               )}
+              {/* The selected track's checkpoints, a quarter of the way apart
+                  (CP2 sits just under the name label, which marks halfway). */}
+              {showTracks &&
+                isSelected &&
+                [0.25, 0.5, 0.75].map((f, i) => {
+                  const p = pointAtDistance(s.points, cumDist, cumDist[cumDist.length - 1] * f);
+                  return (
+                    <Marker
+                      key={`cp${i}`}
+                      coordinate={{ latitude: p.lat, longitude: p.lng }}
+                      anchor={{ x: 0.5, y: f === 0.5 ? -0.8 : 0.5 }}
+                      tracksViewChanges={false}
+                    >
+                      <View style={styles.cpPin}>
+                        <Text style={styles.cpPinText}>CP{i + 1}</Text>
+                      </View>
+                    </Marker>
+                  );
+                })}
             </React.Fragment>
           );
         })}
@@ -927,6 +927,7 @@ export default function HomeScreen({ navigation, route }: Props) {
         </Text>
       </Pressable>
 
+      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} bottom={hudBottom + 162} />
       <Pressable style={[styles.recenterButton, { bottom: hudBottom + 58 }]} onPress={recenter}>
         <Text style={styles.recenterIcon}>o</Text>
       </Pressable>
@@ -1007,6 +1008,9 @@ export default function HomeScreen({ navigation, route }: Props) {
             {selected.bestTimeMs != null
               ? `Best ${(selected.bestTimeMs / 1000).toFixed(1)}s by ${selected.bestTimeUser}`
               : "No runs yet -- be the first"}
+          </Text>
+          <Text style={styles.cardHint}>
+            Just drive it -- rolling through the start times you automatically. Checkpoints split it into quarters.
           </Text>
           <View style={styles.cardActions}>
             {!busy && (
@@ -1105,15 +1109,15 @@ export default function HomeScreen({ navigation, route }: Props) {
           {raceStep === "distance" && (
             <>
               <Text style={styles.cardMeta}>Pick a distance to race {selectedUser.displayName}</Text>
-              <View style={styles.distanceRow}>
+              <View style={styles.distanceGrid}>
                 {RACE_DISTANCES.map((d) => (
                   <Pressable
                     key={d.key}
-                    style={styles.distanceOption}
+                    style={[styles.distanceOption, styles.distanceGridOption]}
                     onPress={() => handleSelectDistance(d.key)}
                     disabled={creatingChallenge}
                   >
-                    <Text style={styles.distanceOptionText}>{d.label}</Text>
+                    <Text style={styles.distanceOptionText}>{d.short}</Text>
                   </Pressable>
                 ))}
               </View>
@@ -1169,24 +1173,55 @@ export default function HomeScreen({ navigation, route }: Props) {
               <Text style={styles.cardMeta}>
                 Pick a distance. A real road course is laid out from where you are, and your time goes on the board.
               </Text>
-              <View style={styles.distanceRow}>
+              <View style={styles.distanceGrid}>
                 {RACE_DISTANCES.map((d) => (
                   <Pressable
                     key={d.key}
-                    style={styles.distanceOption}
+                    style={[styles.distanceOption, styles.distanceGridOption]}
                     onPress={() => {
                       setSoloDistanceKey(d.key);
-                      setSoloStep("direction");
+                      setSoloStep("shape");
                     }}
                   >
-                    <Text style={styles.distanceOptionText}>{d.label}</Text>
+                    <Text style={styles.distanceOptionText}>{d.short}</Text>
                   </Pressable>
                 ))}
               </View>
             </>
+          ) : soloStep === "shape" ? (
+            <>
+              <Text style={styles.cardMeta}>
+                Straight out and done, or a closed loop that brings you back round to where you started? Loops have
+                their own times.
+              </Text>
+              <View style={styles.distanceRow}>
+                <Pressable
+                  style={styles.distanceOption}
+                  onPress={() => {
+                    setSoloShape("sprint");
+                    setSoloStep("direction");
+                  }}
+                >
+                  <Text style={styles.distanceOptionText}>STRAIGHT</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.distanceOption}
+                  onPress={() => {
+                    setSoloShape("loop");
+                    setSoloStep("direction");
+                  }}
+                >
+                  <Text style={styles.distanceOptionText}>LOOP</Text>
+                </Pressable>
+              </View>
+            </>
           ) : (
             <>
-              <Text style={styles.cardMeta}>Which way? Pick the direction the road actually goes.</Text>
+              <Text style={styles.cardMeta}>
+                {soloShape === "loop"
+                  ? "Which way should the loop head out first?"
+                  : "Which way? Pick the direction the road actually goes."}
+              </Text>
               <View style={styles.distanceRow}>
                 {RACE_DIRECTIONS.map((d) => (
                   <Pressable
@@ -1195,7 +1230,11 @@ export default function HomeScreen({ navigation, route }: Props) {
                     onPress={() => {
                       if (!soloDistanceKey) return;
                       setSoloStep("closed");
-                      navigation.navigate("SoloRun", { distanceKey: soloDistanceKey, directionKey: d.key });
+                      navigation.navigate("SoloRun", {
+                        distanceKey: soloDistanceKey,
+                        directionKey: d.key,
+                        shape: soloShape,
+                      });
                     }}
                   >
                     <Text style={styles.distanceOptionText}>{d.short}</Text>
@@ -1327,6 +1366,16 @@ const styles = StyleSheet.create({
     borderColor: colors.cyan,
     maxWidth: 150,
   },
+  cpPin: {
+    backgroundColor: "#000000dd",
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    paddingVertical: 2,
+    paddingHorizontal: 5,
+  },
+  cpPinText: { color: colors.gold, fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
+  cardHint: { color: colors.textMuted, fontSize: 11, marginTop: 4 },
   trackLabelSelected: {
     backgroundColor: colors.racePrimary,
     borderColor: colors.racePrimary,
@@ -1420,6 +1469,9 @@ const styles = StyleSheet.create({
   raceErrorText: { color: colors.danger, fontSize: 12, marginBottom: 6, fontWeight: "600" },
   raceErrorAction: { color: colors.cyan, fontSize: 12, fontWeight: "800", letterSpacing: 0.5, marginBottom: 8 },
   distanceRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  // Ten distances: two rows of five.
+  distanceGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
+  distanceGridOption: { flex: 0, flexGrow: 1, flexBasis: "17%", paddingVertical: 10 },
   distanceOption: {
     flex: 1,
     borderWidth: 1.5,

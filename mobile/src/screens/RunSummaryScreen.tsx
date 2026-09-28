@@ -8,6 +8,7 @@ import { useUser } from "../context/UserContext";
 import { colors, fonts } from "../theme";
 import GridBackground from "../components/GridBackground";
 import NeonButton from "../components/NeonButton";
+import SplitsTable from "../components/SplitsTable";
 
 type Props = NativeStackScreenProps<RootStackParamList, "RunSummary">;
 
@@ -30,6 +31,14 @@ export default function RunSummaryScreen({ route, navigation }: Props) {
       <Text style={styles.detail}>
         Rank #{result.rank} of {result.totalRuns}
       </Text>
+      {result.splitsMs && result.sectorsMs && result.sectorsMs.length > 0 && (
+        <SplitsTable
+          splitsMs={result.splitsMs}
+          sectorsMs={result.sectorsMs}
+          sectorRecordsMs={result.sectorRecordsMs}
+          sectorIsRecord={result.sectorIsRecord}
+        />
+      )}
 
       <NeonButton
         label="VIEW LEADERBOARD"

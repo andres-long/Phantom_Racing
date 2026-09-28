@@ -5,12 +5,13 @@ import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useIsFocused } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList, SegmentSummary, GhostProfileResponse, LatLng, PresenceUser } from "../types";
+import { RootStackParamList, SegmentSummary, GhostProfileResponse, LatLng, PresenceUser, TrackCheckpoint } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import {
   cumulativeDistances,
-  projectOntoPolyline,
+  advanceAlongPolyline,
+  aheadWindowM,
   ghostElapsedAtDistance,
   distanceAtElapsed,
   pointAtDistance,
@@ -34,6 +35,15 @@ import { useIncomingRace } from "../hooks/useIncomingRace";
 import { RacerMarkers, IncomingRaceCard } from "../components/RacersOnTheRoad";
 import { useStaleSpeedReset } from "../utils/speed";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
+import { feedTrackTimer, suppressTrackTimer } from "../trackTimer";
+import { useFollowCamera } from "../hooks/useFollowCamera";
+import ZoomControls from "../components/ZoomControls";
+import { CHECKPOINT_NAMES } from "../components/SplitsTable";
+
+// A crossed checkpoint's readout stays up this long.
+const SPLIT_FLASH_MS = 6000;
+// The server only counts a run that ends within 60 m of the track's end.
+const FINISH_SLACK_M = 40;
 
 type Props = NativeStackScreenProps<RootStackParamList, "RecordRun">;
 type TracePoint = LatLng & { t: number };
@@ -57,6 +67,11 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const [maxSpeedKmh, setMaxSpeedKmh] = useState(0);
   const [progress, setProgress] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  const [checkpoints, setCheckpoints] = useState<TrackCheckpoint[]>([]);
+  // The last checkpoint you crossed: your split there against the record.
+  const [lastSplit, setLastSplit] = useState<{ index: number; ms: number; recordMs: number | null; at: number } | null>(
+    null
+  );
 
   const mapRef = useRef<MapView | null>(null);
   const cumDistRef = useRef<number[]>([]);
@@ -64,6 +79,13 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const finishedRef = useRef(false);
   const maxSpeedRef = useRef(0);
   const autoStartTriggeredRef = useRef(false);
+  // How far along the track you are -- advanced fix by fix so a loop's
+  // start can't be read as its finish (see advanceAlongPolyline).
+  const alongRef = useRef(0);
+  const lastFixTRef = useRef(0);
+  const checkpointsRef = useRef<TrackCheckpoint[]>([]);
+  const nextCheckpointRef = useRef(0);
+  const camera = useFollowCamera(mapRef);
   // Keeps this device visible on other users' maps while racing -- see
   // usePresenceHeartbeat. Updated inline in handleLocationPoints below
   // rather than via a separate effect, so it stays current without adding
@@ -106,6 +128,14 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         const seg = await api.getSegment(segmentId, user?.deviceId);
         setSegment(seg);
         cumDistRef.current = cumulativeDistances(seg.points);
+        // Checkpoints with their records -- best-effort, the run works without.
+        api
+          .getCheckpoints(segmentId, user?.deviceId)
+          .then((c) => {
+            checkpointsRef.current = c.checkpoints;
+            setCheckpoints(c.checkpoints);
+          })
+          .catch(() => {});
         try {
           const g = await api.getGhost(segmentId, undefined, user?.deviceId);
           setGhost(g);
@@ -122,6 +152,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     })();
     return () => {
       stopBackgroundTracking("run");
+      suppressTrackTimer(segmentId, false);
     };
   }, [segmentId]);
 
@@ -150,6 +181,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     if (finishedRef.current) return;
     finishedRef.current = true;
     await stopBackgroundTracking("run");
+    suppressTrackTimer(segmentId, false);
     setRecording(false);
 
     if (!user || !segment) {
@@ -187,13 +219,12 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     presencePosRef.current = { coords: { lat: last.lat, lng: last.lng }, heading: last.heading ?? null };
     // Tighter than the old 0.015 so turns on small roads/blocks are easier
     // to spot coming up, rather than getting lost in a wide zoomed-out view.
-    mapRef.current?.animateToRegion(
-      { latitude: last.lat, longitude: last.lng, latitudeDelta: 0.006, longitudeDelta: 0.006 },
-      500
-    );
+    // Street-level follow, at whatever zoom you've set.
+    camera.follow({ lat: last.lat, lng: last.lng });
     setSpeedKmh(last.speedKmh);
     markFix();
     recordSpeed(last.speedKmh);
+    feedTrackTimer(last);
     if (last.speedKmh > maxSpeedRef.current) {
       maxSpeedRef.current = last.speedKmh;
       setMaxSpeedKmh(last.speedKmh);
@@ -205,8 +236,21 @@ export default function RecordRunScreen({ route, navigation }: Props) {
       const cumDist = cumDistRef.current;
       const totalLength = cumDist[cumDist.length - 1] ?? 0;
       const lastPoint = newPoints[newPoints.length - 1];
-      const { distanceAlongM } = projectOntoPolyline(segment.points, cumDist, lastPoint);
+      for (const p of newPoints) {
+        const gap = lastFixTRef.current ? p.t - lastFixTRef.current : 1000;
+        lastFixTRef.current = p.t;
+        alongRef.current = advanceAlongPolyline(segment.points, cumDist, p, alongRef.current, aheadWindowM(gap)).distanceAlongM;
+      }
+      const distanceAlongM = alongRef.current;
       const elapsed = lastPoint.t - startTimeRef.current;
+
+      // Crossed a checkpoint: flash your split against the record there.
+      const cps = checkpointsRef.current;
+      while (nextCheckpointRef.current < cps.length - 1 && distanceAlongM >= cps[nextCheckpointRef.current].distanceM) {
+        const cp = cps[nextCheckpointRef.current];
+        setLastSplit({ index: nextCheckpointRef.current, ms: elapsed, recordMs: cp.bestSplitMs, at: Date.now() });
+        nextCheckpointRef.current += 1;
+      }
       setElapsedMs(elapsed);
       setProgress(totalLength > 0 ? Math.min(1, distanceAlongM / totalLength) : 0);
 
@@ -216,7 +260,8 @@ export default function RecordRunScreen({ route, navigation }: Props) {
       }
 
       // Auto-finish once we're essentially at the end of the segment.
-      if (totalLength > 0 && distanceAlongM >= totalLength * 0.98 && elapsed >= 3000 && next.length >= 3) {
+      const finishAt = totalLength - Math.min(totalLength * 0.02, FINISH_SLACK_M);
+      if (totalLength > 0 && distanceAlongM >= finishAt && elapsed >= 3000 && next.length >= 3) {
         finishRun(next);
       }
       return next;
@@ -239,6 +284,12 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     }
 
     finishedRef.current = false;
+    // This track is being timed on purpose -- the background timer stands down.
+    suppressTrackTimer(segmentId, true);
+    alongRef.current = 0;
+    lastFixTRef.current = 0;
+    nextCheckpointRef.current = 0;
+    setLastSplit(null);
     setTrace([]);
     maxSpeedRef.current = 0;
     setMaxSpeedKmh(0);
@@ -283,6 +334,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           onPress: () => {
             finishedRef.current = true;
             stopBackgroundTracking("run");
+            suppressTrackTimer(segmentId, false);
             navigation.goBack();
           },
         },
@@ -300,6 +352,11 @@ export default function RecordRunScreen({ route, navigation }: Props) {
     );
   }
 
+  const splitVisible = lastSplit && Date.now() - lastSplit.at < SPLIT_FLASH_MS ? lastSplit : null;
+  const checkpointMarkers = checkpoints
+    .filter((c) => c.fraction < 1)
+    .map((c) => ({ c, p: pointAtDistance(segment.points, cumDistRef.current, c.distanceM) }));
+
   const ghostMarker =
     recording && ghost
       ? pointAtDistance(segment.points, cumDistRef.current, distanceAtElapsed(ghost.profile, elapsedMs))
@@ -312,6 +369,8 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         customMapStyle={tronMapStyle}
+        onRegionChange={camera.onRegionChange}
+        onRegionChangeComplete={camera.onRegionChangeComplete}
         initialRegion={{
           latitude: segment.points[0].lat,
           longitude: segment.points[0].lng,
@@ -324,6 +383,18 @@ export default function RecordRunScreen({ route, navigation }: Props) {
           strokeColor={colors.cyan}
           strokeWidth={4}
         />
+        {checkpointMarkers.map(({ c, p }) => (
+          <Marker
+            key={`cp${c.index}`}
+            coordinate={{ latitude: p.lat, longitude: p.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+          >
+            <View style={styles.cpPin}>
+              <Text style={styles.cpPinText}>CP{c.index}</Text>
+            </View>
+          </Marker>
+        ))}
         {myPos && (
           <Marker
             coordinate={{ latitude: myPos.lat, longitude: myPos.lng }}
@@ -375,8 +446,33 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         </Text>
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+          {checkpoints
+            .filter((c) => c.fraction < 1)
+            .map((c) => (
+              <View key={c.index} style={[styles.progressTick, { left: `${c.fraction * 100}%` }]} />
+            ))}
         </View>
+        {splitVisible && (
+          <Text
+            style={[
+              styles.split,
+              {
+                color:
+                  splitVisible.recordMs == null || splitVisible.ms <= splitVisible.recordMs ? colors.gold : colors.textSecondary,
+              },
+            ]}
+          >
+            {CHECKPOINT_NAMES[splitVisible.index]} {formatDuration(splitVisible.ms)}
+            {splitVisible.recordMs != null
+              ? `  (${splitVisible.ms <= splitVisible.recordMs ? "-" : "+"}${formatDuration(
+                  Math.abs(splitVisible.ms - splitVisible.recordMs)
+                )} vs record)`
+              : "  -- first split here"}
+          </Text>
+        )}
       </View>
+
+      <ZoomControls onZoomIn={camera.zoomIn} onZoomOut={camera.zoomOut} />
 
       <NeonButton
         label={submitting ? "SUBMITTING..." : recording ? "FINISH RUN" : "START RUN"}
@@ -445,6 +541,17 @@ const styles = StyleSheet.create({
   topSpeed: { color: colors.textMuted, fontSize: 12 },
   progressTrack: { height: 6, backgroundColor: colors.bgElevated, borderRadius: 3, marginTop: 12, overflow: "hidden" },
   progressFill: { height: 6, backgroundColor: colors.cyan },
+  progressTick: { position: "absolute", top: 0, width: 2, height: 6, backgroundColor: colors.gold },
+  split: { fontFamily: fonts.heading, fontSize: 12, textAlign: "center", marginTop: 8 },
+  cpPin: {
+    backgroundColor: "#000000dd",
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    paddingVertical: 2,
+    paddingHorizontal: 5,
+  },
+  cpPinText: { color: colors.gold, fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
   button: {
     position: "absolute",
     bottom: 30,

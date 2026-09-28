@@ -298,6 +298,27 @@ export default function SoloRunScreen({ route, navigation }: Props) {
 
   const runAgain = () => navigation.replace("SoloRun", { distanceKey, directionKey, shape });
 
+  const shareRun = () => {
+    const r = result?.result;
+    if (!r) return;
+    const timed = !!result?.counted;
+    navigation.navigate("ShareDrive", {
+      title: `SOLO ${isLoop ? `${run?.distanceLabel ?? ""} LOOP` : run?.distanceLabel ?? ""}`.trim(),
+      subtitle: result?.isPersonalBest
+        ? "NEW PERSONAL BEST"
+        : result?.worldRank != null
+        ? `#${result.worldRank} IN THE WORLD`
+        : undefined,
+      stats: [
+        { label: timed ? "Time" : "Time (not counted)", value: formatDuration(r.durationMs) },
+        { label: "Distance", value: formatDistanceShort(r.distanceM ?? 0, units) },
+        { label: "Avg speed", value: `${displaySpeedKmh(r.avgSpeedKmh, units)} ${speedUnit(units)}` },
+        { label: "Top speed", value: `${displaySpeedKmh(r.maxSpeedKmh, units)} ${speedUnit(units)}` },
+      ],
+      route: course,
+    });
+  };
+
   // ---- render --------------------------------------------------------------
   if (phase === "locating" || phase === "error") {
     return (
@@ -459,6 +480,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
               {displaySpeedKmh(result.result.maxSpeedKmh, units)} {speedUnit(units)}
             </Text>
           )}
+          <NeonButton label="SHARE" variant="outline" onPress={shareRun} style={styles.shareButton} />
           <View style={styles.actionsRow}>
             <NeonButton label="RUN IT AGAIN" onPress={runAgain} style={styles.actionButton} />
             <NeonButton label="DONE" variant="outline" onPress={() => navigation.goBack()} style={styles.actionButton} />
@@ -541,7 +563,8 @@ const styles = StyleSheet.create({
   pb: { color: colors.gold, fontFamily: fonts.heading, fontSize: 14, letterSpacing: 2, marginTop: 6 },
   resultMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 6, textAlign: "center" },
   resultDetail: { color: colors.textMuted, fontSize: 12, marginTop: 10 },
-  actionsRow: { flexDirection: "row", gap: 10, marginTop: 16, alignSelf: "stretch" },
+  actionsRow: { flexDirection: "row", gap: 10, marginTop: 10, alignSelf: "stretch" },
   actionButton: { flex: 1 },
+  shareButton: { alignSelf: "stretch", marginTop: 14 },
   bottomButton: { position: "absolute", left: 20, right: 20 },
 });

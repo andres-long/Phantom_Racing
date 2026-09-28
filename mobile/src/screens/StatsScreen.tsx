@@ -18,6 +18,9 @@ import { formatDuration } from "../utils/geo";
 import { RACE_DISTANCES } from "../raceDistances";
 import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
+import NeonButton from "../components/NeonButton";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Stats">;
 
@@ -118,6 +121,7 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
 
 function MyStats() {
   const { user, units } = useUser();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [totals, setTotals] = useState<Totals | null>(null);
   const [solo, setSolo] = useState<SoloStatsResponse | null>(null);
   const [bestShape, setBestShape] = useState<SoloShape>("sprint");
@@ -236,6 +240,24 @@ function MyStats() {
               <Text style={styles.tileUnit}>of {totals.raceCount}</Text>
             </View>
           )}
+          <NeonButton
+            label="SHARE MY STATS"
+            variant="outline"
+            onPress={() =>
+              navigation.navigate("ShareDrive", {
+                title: `${user?.displayName ?? ""}`.toUpperCase(),
+                subtitle: "LIFETIME",
+                stats: [
+                  { label: "Top speed", value: `${displaySpeedKmh(totals.topSpeedKmh, units)} ${speedUnit(units)}` },
+                  { label: "Distance driven", value: formatDistance(totals.distanceM) },
+                  { label: "Avg speed", value: `${displaySpeedKmh(totals.avgSpeedKmh, units)} ${speedUnit(units)}` },
+                  totals.raceCount > 0
+                    ? { label: "Races won", value: `${totals.raceWins} of ${totals.raceCount}` }
+                    : { label: "Drives", value: `${totals.driveCount}` },
+                ],
+              })
+            }
+          />
           <Text style={styles.footnote}>
             {totals.driveCount > 0
               ? `Based on ${totals.driveCount} drive${

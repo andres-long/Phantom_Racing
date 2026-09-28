@@ -17,7 +17,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "GoSummary">;
 // happened to be, just how the actual drive compared to Google's ETA from
 // before you left.
 export default function GoSummaryScreen({ route, navigation }: Props) {
-  const { result } = route.params;
+  const { result, route: drivenLine } = route.params;
   const { units } = useUser();
   const beatEstimate = result.deltaMs != null ? result.deltaMs <= 0 : null;
 
@@ -45,6 +45,23 @@ export default function GoSummaryScreen({ route, navigation }: Props) {
         Top speed: {displaySpeedKmh(result.maxSpeedKmh, units)} {speedUnit(units)}
       </Text>
 
+      <NeonButton
+        label="SHARE"
+        onPress={() =>
+          navigation.navigate("ShareDrive", {
+            title: `TO ${result.destinationName.toUpperCase()}`,
+            subtitle: beatEstimate ? "BEAT THE ESTIMATE" : undefined,
+            stats: [
+              { label: "Distance", value: formatDistanceLong(result.distanceM, units, 1) },
+              { label: "Time", value: formatDuration(result.durationMs) },
+              { label: "Avg speed", value: `${displaySpeedKmh(result.avgSpeedKmh, units)} ${speedUnit(units)}` },
+              { label: "Top speed", value: `${displaySpeedKmh(result.maxSpeedKmh, units)} ${speedUnit(units)}` },
+            ],
+            route: drivenLine ?? null,
+          })
+        }
+        style={styles.button}
+      />
       <NeonButton label="GO SOMEWHERE ELSE" onPress={() => navigation.replace("GoTo")} style={styles.button} />
       <NeonButton label="BACK HOME" onPress={() => navigation.popToTop()} variant="outline" style={styles.button} />
     </View>

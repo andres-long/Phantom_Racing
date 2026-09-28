@@ -402,9 +402,21 @@ export type RootStackParamList = {
     distanceM: number;
     durationS: number;
   };
-  GoSummary: { result: SubmitTripResponse };
+  // `route`: the line you drove, for sharing the trip.
+  GoSummary: { result: SubmitTripResponse; route?: LatLng[] };
   Stats: undefined;
   RaceLive: { raceId: string };
   SoloRun: { distanceKey: RaceDistanceKey; directionKey: RaceDirectionKey; shape?: SoloShape };
   RaceResult: { raceId: string };
+  // Share a drive as a story-sized image (see ShareDriveScreen). Values come
+  // pre-formatted in the viewer's units; the route is passed in, or looked
+  // up from the track (`segmentId`) or race course (`raceId`).
+  ShareDrive: {
+    title: string;
+    subtitle?: string;
+    stats: { label: string; value: string }[];
+    route?: LatLng[] | null;
+    segmentId?: string;
+    raceId?: string;
+  };
 };

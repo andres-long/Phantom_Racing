@@ -11,6 +11,7 @@ import {
 } from "../trackTimer";
 import { navigationRef } from "../navigation/navigationRef";
 import { formatDuration } from "../utils/geo";
+import { displaySpeedKmh, speedUnit } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 
 // How long the result card stays up on its own.
@@ -20,7 +21,7 @@ const RESULT_MS = 9000;
 // it's timing you through a track, and a card with your time and where it
 // ranks when you reach the end. Floats above every screen.
 export default function TrackTimerToast() {
-  const { user } = useUser();
+  const { user, units } = useUser();
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<TrackTimerStatus>(getTrackTimerStatus());
   const [now, setNow] = useState(Date.now());
@@ -67,6 +68,20 @@ export default function TrackTimerToast() {
       navigationRef.navigate("Leaderboard", { segmentId: status.segmentId, segmentName: status.segmentName });
     }
   };
+  const shareRun = () => {
+    dismissTrackTimerResult();
+    if (!navigationRef.isReady()) return;
+    navigationRef.navigate("ShareDrive", {
+      title: status.segmentName.toUpperCase(),
+      subtitle: r.isNewRecord ? "NEW TRACK RECORD" : `#${r.rank} OF ${r.totalRuns}`,
+      stats: [
+        { label: "Time", value: formatDuration(r.durationMs) },
+        { label: "Avg speed", value: `${displaySpeedKmh(r.avgSpeedKmh, units)} ${speedUnit(units)}` },
+        { label: "Top speed", value: `${displaySpeedKmh(r.maxSpeedKmh, units)} ${speedUnit(units)}` },
+      ],
+      segmentId: status.segmentId,
+    });
+  };
   return (
     <Pressable style={[styles.card, { top: insets.top + 54 }]} onPress={openBoard}>
       <Text style={styles.cardLabel} numberOfLines={1}>
@@ -81,7 +96,12 @@ export default function TrackTimerToast() {
           {sectorRecords === 1 ? "1 checkpoint record" : `${sectorRecords} checkpoint records`}
         </Text>
       )}
-      <Text style={styles.cardHint}>Tap for the leaderboard</Text>
+      <View style={styles.cardLinks}>
+        <Text style={styles.cardHint}>Tap for the leaderboard</Text>
+        <Pressable onPress={shareRun} hitSlop={8}>
+          <Text style={styles.cardShare}>SHARE</Text>
+        </Pressable>
+      </View>
       <Pressable style={styles.close} onPress={dismissTrackTimerResult} hitSlop={10}>
         <Text style={styles.closeText}>x</Text>
       </Pressable>
@@ -118,7 +138,9 @@ const styles = StyleSheet.create({
   cardRank: { color: colors.cyan, fontFamily: fonts.heading, fontSize: 13, marginTop: 4, letterSpacing: 1 },
   gold: { color: colors.gold },
   cardMeta: { color: colors.gold, fontSize: 12, marginTop: 4 },
-  cardHint: { color: colors.textMuted, fontSize: 11, marginTop: 6 },
+  cardHint: { color: colors.textMuted, fontSize: 11 },
+  cardLinks: { flexDirection: "row", alignItems: "center", gap: 16, marginTop: 6 },
+  cardShare: { color: colors.cyan, fontSize: 11, fontWeight: "800", letterSpacing: 1 },
   close: { position: "absolute", top: 6, right: 10 },
   closeText: { color: colors.textSecondary, fontSize: 14, fontWeight: "800" },
 });

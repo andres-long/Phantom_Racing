@@ -41,6 +41,22 @@ export default function RunSummaryScreen({ route, navigation }: Props) {
       )}
 
       <NeonButton
+        label="SHARE"
+        onPress={() =>
+          navigation.navigate("ShareDrive", {
+            title: segmentName.toUpperCase(),
+            subtitle: result.isNewRecord ? "NEW TRACK RECORD" : `#${result.rank} OF ${result.totalRuns}`,
+            stats: [
+              { label: "Time", value: formatDuration(result.durationMs) },
+              { label: "Avg speed", value: `${displaySpeedKmh(result.avgSpeedKmh, units)} ${speedUnit(units)}` },
+              { label: "Top speed", value: `${displaySpeedKmh(result.maxSpeedKmh, units)} ${speedUnit(units)}` },
+            ],
+            segmentId,
+          })
+        }
+        style={styles.button}
+      />
+      <NeonButton
         label="VIEW LEADERBOARD"
         onPress={() => navigation.navigate("Leaderboard", { segmentId, segmentName })}
         style={styles.button}

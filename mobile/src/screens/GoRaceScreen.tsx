@@ -8,7 +8,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, LatLng, PresenceUser } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
-import { cumulativeDistances, projectOntoPolyline, haversine, formatDuration } from "../utils/geo";
+import { cumulativeDistances, projectOntoPolyline, haversine, formatDuration, resamplePolyline } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -143,7 +143,13 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         maxSpeedRef.current,
         durationS
       );
-      navigation.replace("GoSummary", { result });
+      navigation.replace("GoSummary", {
+        result,
+        route: resamplePolyline(
+          finalTrace.map((p) => ({ lat: p.lat, lng: p.lng })),
+          300
+        ),
+      });
     } catch (e: any) {
       Alert.alert("Trip not saved", e.message || "Unknown error", [
         { text: "OK", onPress: () => navigation.goBack() },

@@ -47,8 +47,17 @@
       [
         "@config-plugins/react-native-webrtc",
         {
-          "cameraPermission": "Phantom Racing does not use your camera -- this is required by the voice library but never triggered.",
+          "cameraPermission": "Phantom Racing uses your camera only when you take a photo to share a drive.",
           "microphonePermission": "Phantom Racing needs your microphone for push-to-talk voice with nearby racers."
+        }
+      ],
+      "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Phantom Racing uses your photos only when you pick one to share a drive on.",
+          "cameraPermission": "Phantom Racing uses your camera only when you take a photo to share a drive.",
+          "microphonePermission": false
         }
       ]
     ],

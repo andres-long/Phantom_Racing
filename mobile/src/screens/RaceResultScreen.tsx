@@ -158,6 +158,28 @@ export default function RaceResultScreen({ route, navigation }: Props) {
         </View>
       </View>
 
+      {!waitingOnOpponent && (
+        <NeonButton
+          label="SHARE"
+          variant="outline"
+          onPress={() =>
+            navigation.navigate("ShareDrive", {
+              title: `${race.distanceLabel} VS ${race.opponentDisplayName.toUpperCase()}`,
+              subtitle: isTie ? "DEAD HEAT" : iWon ? "WON" : "LOST",
+              stats: [
+                { label: "My time", value: formatDuration(race.myResult!.durationMs) },
+                ...(race.opponentResult
+                  ? [{ label: `${race.opponentDisplayName}`, value: formatDuration(race.opponentResult.durationMs) }]
+                  : []),
+                { label: "Avg speed", value: `${displaySpeedKmh(race.myResult!.avgSpeedKmh, units)} ${speedUnit(units)}` },
+                { label: "Top speed", value: `${displaySpeedKmh(race.myResult!.maxSpeedKmh, units)} ${speedUnit(units)}` },
+              ],
+              raceId,
+            })
+          }
+          style={styles.button}
+        />
+      )}
       <NeonButton
         label={drivingUnderneath > 0 ? "BACK TO YOUR DRIVE" : "BACK TO MAP"}
         onPress={leave}

@@ -420,5 +420,7 @@ export type RootStackParamList = {
     raceId?: string;
     // Opened on a track (All Tracks): the card fills in your best on it.
     trackId?: string;
+    // The title is a racer's name (lifetime stats) -- shown lit up.
+    titleIsName?: boolean;
   };
 };

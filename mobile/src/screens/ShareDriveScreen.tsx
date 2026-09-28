@@ -11,8 +11,6 @@ import {
   FlatList,
   useWindowDimensions,
 } from "react-native";
-import MapView, { Polyline, PROVIDER_GOOGLE } from "react-native-maps";
-import * as Location from "expo-location";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Polyline as SvgPolyline, Circle, Line } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -23,7 +21,6 @@ import { useUser } from "../context/UserContext";
 import { toLocalXY, resamplePolyline, formatDuration } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceLong } from "../utils/units";
 import { colors, fonts } from "../theme";
-import { tronMapStyle } from "../mapStyle";
 import NeonButton from "../components/NeonButton";
 import { shareSupport, canShareImage, pickPhoto, shareViewAsImage } from "../shareNative";
 
@@ -31,12 +28,12 @@ type Props = NativeStackScreenProps<RootStackParamList, "ShareDrive">;
 
 // What's behind the stats: your own photo (the Strava-style overlay -- the
 // numbers, the route line and the wordmark floating straight on the
-// picture), the map with the route on it, or a Tron-style grid.
-type Backdrop = "photo" | "map" | "card";
+// picture), or a Tron-style grid. (No map: a picture of a Google map has to
+// carry Google's logo.)
+type Backdrop = "photo" | "card";
 
 const BACKDROPS: { key: Backdrop; label: string }[] = [
   { key: "photo", label: "PHOTO" },
-  { key: "map", label: "MAP" },
   { key: "card", label: "GRID" },
 ];
 
@@ -48,6 +45,7 @@ type Content = {
   route: LatLng[] | null;
   segmentId?: string;
   raceId?: string;
+  titleIsName?: boolean;
 };
 
 // A track you can pick to share, with your own best on it (if any).
@@ -82,14 +80,13 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
     route: route.params.route && route.params.route.length >= 2 ? route.params.route : null,
     segmentId: route.params.segmentId,
     raceId: route.params.raceId,
+    titleIsName: route.params.titleIsName,
   };
   const [content, setContent] = useState<Content>(fromDrive);
   // Opens on the Tron grid; MAP and PHOTO are a tap away.
   const [backdrop, setBackdrop] = useState<Backdrop>("card");
   const [path, setPath] = useState<LatLng[] | null>(fromDrive.route);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [mapShot, setMapShot] = useState<string | null>(null);
-  const [mapCenter, setMapCenter] = useState<LatLng | null>(null);
   const [sharing, setSharing] = useState(false);
   // Everything but the card hidden, for a clean screenshot (older app builds).
   const [clean, setClean] = useState(false);
@@ -100,7 +97,6 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
   const [loadingTrack, setLoadingTrack] = useState(false);
 
   const cardRef = useRef<View | null>(null);
-  const mapRef = useRef<MapView | null>(null);
 
   // The card as big as fits above the controls, at 9:16.
   const cardW = Math.min(winW - 32, ((winH - insets.top - insets.bottom - 270) * 9) / 16);
@@ -134,13 +130,6 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content]);
 
-  // No route (lifetime stats): the map shows where you are.
-  useEffect(() => {
-    if (path || mapCenter) return;
-    Location.getLastKnownPositionAsync({})
-      .then((loc) => loc && setMapCenter({ lat: loc.coords.latitude, lng: loc.coords.longitude }))
-      .catch(() => {});
-  }, [path, mapCenter]);
 
   // A drive on a track (a timed run): add the track record and who holds
   // it, if the card has room and doesn't show it already.
@@ -204,50 +193,12 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
     };
   }, [drawPath, scale, backdrop]);
 
-  // Map backdrop: fit the route, then freeze it into a picture -- a live map
-  // can't be captured into an image, a snapshot of it can.
-  const onMapReady = () => {
-    if (drawPath && drawPath.length >= 2) {
-      // The route should sit in the lower half, under the numbers. Rather
-      // than rely on edge padding (pixels on some Android versions, points
-      // on others), fit to the route plus a margin box stretched upwards.
-      const lats = drawPath.map((p) => p.lat);
-      const lngs = drawPath.map((p) => p.lng);
-      const n = Math.max(...lats);
-      const sLat = Math.min(...lats);
-      const e = Math.max(...lngs);
-      const w = Math.min(...lngs);
-      const latSpan = Math.max(n - sLat, 0.0008);
-      const lngSpan = Math.max(e - w, 0.0008);
-      const box = [
-        { latitude: n + latSpan * 1.1, longitude: w - lngSpan * 0.12 },
-        { latitude: sLat - latSpan * 0.25, longitude: e + lngSpan * 0.12 },
-      ];
-      mapRef.current?.fitToCoordinates(
-        [...drawPath.map((p) => ({ latitude: p.lat, longitude: p.lng })), ...box],
-        { edgePadding: { top: 0, right: 0, bottom: 0, left: 0 }, animated: false }
-      );
-    }
-    setTimeout(async () => {
-      try {
-        const uri = await mapRef.current?.takeSnapshot({ format: "png", result: "file" });
-        if (uri) setMapShot(uri);
-      } catch {
-        // Keep the live map on screen; a screenshot still works.
-      }
-    }, 1500);
-  };
-
-  // A new route or center means a new snapshot.
-  useEffect(() => {
-    setMapShot(null);
-  }, [drawPath, mapCenter]);
 
   const choosePhoto = async (fromCamera: boolean) => {
     if (!shareSupport.picker) {
       Alert.alert(
         "Needs the app update",
-        "Putting your stats on your own photo arrives with the next app update. The map and card styles work now."
+        "Putting your stats on your own photo arrives with the next app update. The grid style works now."
       );
       return;
     }
@@ -373,7 +324,15 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
             ]}
             numberOfLines={1}
           >
-            {s.label}
+            {s.label.startsWith("Record by ") ? (
+              <>
+                {"Record by "}
+                {/* The record holder's name, lit up in electric cyan. */}
+                <Text style={[styles.holder, { fontSize: (onPhoto ? 12 : 11) * scale }]}>{s.label.slice(10)}</Text>
+              </>
+            ) : (
+              s.label
+            )}
           </Text>
           <Text
             style={[onPhoto ? styles.photoValue : styles.statValue, TEXT_SHADOW, { fontSize: (onPhoto ? 25 : 26) * scale }]}
@@ -420,7 +379,16 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
 
   const header = (
     <>
-      <Text style={[styles.title, TEXT_SHADOW, { fontSize: 13 * scale }]} numberOfLines={2}>
+      <Text
+        style={[
+          styles.title,
+          TEXT_SHADOW,
+          { fontSize: 13 * scale },
+          // Your own name on a lifetime-stats card lights up like a record holder's.
+          content.titleIsName && [styles.holder, { fontSize: 16 * scale }],
+        ]}
+        numberOfLines={2}
+      >
         {content.title}
       </Text>
       {!!content.subtitle && (
@@ -444,64 +412,7 @@ export default function ShareDriveScreen({ route, navigation }: Props) {
 
       {backdrop === "card" && <TronGrid width={cardW} height={cardH} scale={scale} />}
 
-      {backdrop === "map" &&
-        (mapShot ? (
-          <Image source={{ uri: mapShot }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-        ) : (
-          <MapView
-            key={`${drawPath?.length ?? 0}-${drawPath?.[0]?.lat ?? 0}-${mapCenter ? "c" : "n"}`}
-            ref={mapRef}
-            style={StyleSheet.absoluteFill}
-            provider={PROVIDER_GOOGLE}
-            customMapStyle={tronMapStyle}
-            onMapReady={onMapReady}
-            scrollEnabled={false}
-            zoomEnabled={false}
-            rotateEnabled={false}
-            pitchEnabled={false}
-            toolbarEnabled={false}
-            initialRegion={
-              drawPath
-                ? { latitude: drawPath[0].lat, longitude: drawPath[0].lng, latitudeDelta: 0.02, longitudeDelta: 0.02 }
-                : mapCenter
-                ? { latitude: mapCenter.lat, longitude: mapCenter.lng, latitudeDelta: 0.03, longitudeDelta: 0.03 }
-                : undefined
-            }
-          >
-            {drawPath && (
-              <Polyline
-                coordinates={drawPath.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
-                strokeColor={ROUTE_GLOW}
-                strokeWidth={14}
-              />
-            )}
-            {drawPath && (
-              <Polyline
-                coordinates={drawPath.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
-                strokeColor={ROUTE}
-                strokeWidth={4}
-              />
-            )}
-          </MapView>
-        ))}
-
-      {backdrop === "map" ? (
-        <>
-          {/* Numbers on a dark band across the top, the map below. */}
-          <LinearGradient
-            colors={["rgba(5,7,12,0.92)", "rgba(5,7,12,0.7)", "rgba(5,7,12,0)"]}
-            style={[styles.mapBand, { height: cardH * 0.46 }]}
-            pointerEvents="none"
-          />
-          <View style={[styles.mapTop, { paddingTop: 22 * scale }]} pointerEvents="none">
-            {header}
-            {statBlock}
-          </View>
-          <View style={[styles.mapBottom, { bottom: 14 * scale }]} pointerEvents="none">
-            {wordmark}
-          </View>
-        </>
-      ) : onPhoto ? (
+      {onPhoto ? (
         // Strava-style: just the numbers, the line and the wordmark,
         // floating on the picture in its upper half.
         <View style={[styles.centerStack, { paddingTop: 62 * scale }]} pointerEvents="none">
@@ -748,9 +659,6 @@ const styles = StyleSheet.create({
   },
   photoEmptyText: { color: colors.textMuted, fontSize: 12, fontWeight: "800", letterSpacing: 1.5 },
   centerStack: { ...StyleSheet.absoluteFill, alignItems: "center" },
-  mapBand: { position: "absolute", left: 0, right: 0, top: 0 },
-  mapTop: { position: "absolute", left: 0, right: 0, top: 0, alignItems: "center" },
-  mapBottom: { position: "absolute", left: 0, right: 0, alignItems: "center" },
   statsStack: { alignItems: "center" },
   title: { color: "#ffffff", fontFamily: fonts.heading, letterSpacing: 1.5, textAlign: "center", paddingHorizontal: 20 },
   subtitle: { color: colors.cyan, fontFamily: fonts.heading, letterSpacing: 1.5, marginTop: 4, textAlign: "center" },
@@ -760,6 +668,14 @@ const styles = StyleSheet.create({
   photoLabel: { color: "#ffffff", fontWeight: "600" },
   photoValue: { color: "#ffffff", fontWeight: "900", letterSpacing: 0.3 },
   wordmark: { color: "#ffffff", fontFamily: fonts.display, letterSpacing: 3 },
+  holder: {
+    color: "#3ff6ff",
+    fontFamily: fonts.heading,
+    letterSpacing: 1,
+    textShadowColor: "rgba(0, 234, 255, 0.95)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
+  },
   segment: { flexDirection: "row", gap: 8, marginTop: 12 },
   segmentOption: {
     borderWidth: 1,

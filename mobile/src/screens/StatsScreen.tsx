@@ -246,6 +246,7 @@ function MyStats() {
             onPress={() =>
               navigation.navigate("ShareDrive", {
                 title: `${user?.displayName ?? ""}`.toUpperCase(),
+                titleIsName: true,
                 subtitle: "LIFETIME",
                 stats: [
                   { label: "Top speed", value: `${displaySpeedKmh(totals.topSpeedKmh, units)} ${speedUnit(units)}` },

@@ -418,5 +418,7 @@ export type RootStackParamList = {
     route?: LatLng[] | null;
     segmentId?: string;
     raceId?: string;
+    // Opened on a track (All Tracks): the card fills in your best on it.
+    trackId?: string;
   };
 };

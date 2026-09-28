@@ -6,7 +6,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, SegmentSummary, LatLng } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
-import { cumulativeDistances, projectOntoPolyline } from "../utils/geo";
+import { cumulativeDistances, projectOntoPolyline, formatDuration } from "../utils/geo";
 import { formatDistanceShort, formatDistanceLong } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import NeonButton from "../components/NeonButton";
@@ -170,6 +170,24 @@ export default function AllSegmentsScreen({ navigation }: Props) {
                   style={styles.cardButton}
                 />
               </View>
+              <NeonButton
+                label="SHARE"
+                variant="outline"
+                onPress={() =>
+                  navigation.navigate("ShareDrive", {
+                    title: item.name.toUpperCase(),
+                    stats: [
+                      { label: "Distance", value: formatDistanceLong(item.lengthM, units, 2) },
+                      { label: "Record", value: item.bestTimeMs != null ? formatDuration(item.bestTimeMs) : "--" },
+                      { label: "Runs", value: `${item.runCount}` },
+                    ],
+                    route: item.points,
+                    segmentId: item.id,
+                    trackId: item.id,
+                  })
+                }
+                style={styles.shareButton}
+              />
               {isOwner && (
                 <NeonButton
                   label={
@@ -222,5 +240,6 @@ const styles = StyleSheet.create({
   cardMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
   cardActions: { flexDirection: "row", marginTop: 14, gap: 10 },
   cardButton: { flex: 1 },
+  shareButton: { marginTop: 10 },
   privacyButton: { marginTop: 4 },
 });

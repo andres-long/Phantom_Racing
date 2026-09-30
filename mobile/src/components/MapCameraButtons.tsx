@@ -95,23 +95,85 @@ export function TargetButton({
   );
 }
 
-// Both, stacked on the right edge of a driving screen's map.
+// A compass needle: cyan tip = north. Lit when the map turns with you.
+export function CompassIcon({ size = 22, color = colors.cyan }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx={12} cy={12} r={9.5} stroke={color} strokeWidth={1.6} opacity={0.6} />
+      <Path d="M12 3.8 L15.2 12 L8.8 12 Z" fill={color} />
+      <Path d="M12 20.2 L15.2 12 L8.8 12 Z" fill="none" stroke={color} strokeWidth={1.4} strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+// Heading-up (the map turns so you always drive up the screen) or
+// north-up (the map stays put and your car icon turns).
+export function CompassButton({
+  mode,
+  onPress,
+  style,
+}: {
+  mode: "heading" | "north";
+  onPress: () => void;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const [showLabel, setShowLabel] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    []
+  );
+  const press = () => {
+    onPress();
+    setShowLabel(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setShowLabel(false), 1500);
+  };
+  // The label says what it just switched to -- the opposite of before.
+  const nowLabel = mode === "heading" ? "HEADING UP" : "NORTH UP";
+  return (
+    <View style={style}>
+      <Pressable
+        style={[styles.button, mode === "heading" && styles.buttonLit]}
+        onPress={press}
+        hitSlop={6}
+        accessibilityLabel={mode === "heading" ? "Switch to north up" : "Switch to heading up"}
+      >
+        <CompassIcon color={mode === "heading" ? colors.cyan : colors.textSecondary} />
+      </Pressable>
+      {showLabel && (
+        <View style={styles.label} pointerEvents="none">
+          <Text style={styles.labelText}>{nowLabel}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// All three, stacked on the right edge of a driving screen's map.
 export default function MapCameraControls({
   viewLabel,
   following,
   onCycleView,
   onRecenter,
+  mode,
+  onToggleMode,
   bottom,
 }: {
   viewLabel: string;
   following: boolean;
   onCycleView: () => void;
   onRecenter: () => void;
+  mode: "heading" | "north";
+  onToggleMode: () => void;
   // Pinned this far from the bottom; otherwise it sits mid-way down.
   bottom?: number;
 }) {
   return (
-    <View style={[styles.stack, bottom != null ? { bottom } : { top: "46%" }]} pointerEvents="box-none">
+    <View style={[styles.stack, bottom != null ? { bottom } : { top: "40%" }]} pointerEvents="box-none">
+      <CompassButton mode={mode} onPress={onToggleMode} style={{ marginBottom: 10 }} />
       <CameraButton viewLabel={viewLabel} onPress={onCycleView} />
       <TargetButton following={following} onPress={onRecenter} style={{ marginTop: 10 }} />
     </View>
@@ -131,6 +193,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   buttonAlert: { borderColor: colors.gold },
+  buttonLit: { borderColor: colors.cyan },
   label: {
     position: "absolute",
     right: 52,

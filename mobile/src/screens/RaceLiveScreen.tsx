@@ -338,7 +338,10 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     const pos = { lat: last.lat, lng: last.lng };
 
     setMyPos(pos);
-    if (last.heading != null) setHeading(last.heading);
+    // Which way you're going -- the car icon points along it (and, heading-up,
+    // so does the map).
+    const course = camera.trackCourse({ lat: last.lat, lng: last.lng }, last.heading, last.speedKmh);
+    if (course != null) setHeading(course);
     presencePosRef.current = { coords: pos, heading: last.heading ?? null };
     reportPosition(pos, last.heading ?? null);
     camera.follow(pos);
@@ -592,6 +595,8 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
         following={camera.following}
         onCycleView={camera.cycleView}
         onRecenter={() => camera.recenter(myPos)}
+        mode={camera.mode}
+        onToggleMode={camera.toggleMode}
       />
 
       {/* Straight to the map, without ending the race. */}

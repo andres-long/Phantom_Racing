@@ -33,9 +33,37 @@ const TOUCH_HOLD_MS = 1500;
 // looking around, so following pauses.
 const PAN_AWAY_PX = 90;
 
+// Which way is up: "heading" turns the map so the way you're driving is
+// always up the screen (like a sat-nav), "north" keeps north up and turns
+// your car icon instead. Shared and remembered like the zoom.
+export type CameraMode = "heading" | "north";
+const MODE_KEY = "phantom.cameraMode";
+// Course is only trusted from the GPS above this speed; below it (or with
+// no GPS heading) it comes from how you've actually moved.
+const COURSE_MIN_KMH = 4;
+const COURSE_MIN_MOVE_M = 5;
+
 let sharedZoom = DEFAULT_FOLLOW_ZOOM;
+let sharedMode: CameraMode = "heading";
 let loaded = false;
 const listeners = new Set<(z: number) => void>();
+const modeListeners = new Set<(m: CameraMode) => void>();
+
+function publishMode(m: CameraMode) {
+  sharedMode = m;
+  modeListeners.forEach((l) => l(m));
+  AsyncStorage.setItem(MODE_KEY, m).catch(() => {});
+}
+
+// Compass bearing from a to b, degrees clockwise from north.
+function bearingDeg(a: LatLng, b: LatLng) {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const y = Math.sin(toRad(b.lng - a.lng)) * Math.cos(toRad(b.lat));
+  const x =
+    Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
+    Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(toRad(b.lng - a.lng));
+  return (((Math.atan2(y, x) * 180) / Math.PI) + 360) % 360;
+}
 
 function clampZoom(z: number) {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
@@ -55,6 +83,11 @@ async function loadZoomOnce() {
     if (Number.isFinite(v) && v > 0) {
       sharedZoom = clampZoom(v);
       listeners.forEach((l) => l(sharedZoom));
+    }
+    const m = await AsyncStorage.getItem(MODE_KEY);
+    if (m === "heading" || m === "north") {
+      sharedMode = m;
+      modeListeners.forEach((l) => l(m));
     }
   } catch {
     // Default zoom it is.
@@ -87,16 +120,27 @@ export function useFollowCamera(
   const lastPosRef = useRef<LatLng | null>(null);
   const touchedAtRef = useRef(0);
   const touchingRef = useRef(false);
+  const [mode, setMode] = useState<CameraMode>(sharedMode);
+  const modeRef = useRef<CameraMode>(sharedMode);
+  // Which way you're going (degrees), and where it was last worked out from.
+  const courseRef = useRef<number | null>(null);
+  const courseAnchorRef = useRef<LatLng | null>(null);
 
   useEffect(() => {
     const l = (z: number) => {
       zoomRef.current = z;
       setZoom(z);
     };
+    const ml = (m: CameraMode) => {
+      modeRef.current = m;
+      setMode(m);
+    };
     listeners.add(l);
+    modeListeners.add(ml);
     loadZoomOnce();
     return () => {
       listeners.delete(l);
+      modeListeners.delete(ml);
     };
   }, []);
 
@@ -108,13 +152,45 @@ export function useFollowCamera(
 
   const moveTo = useCallback(
     (pos: LatLng, duration: number) => {
+      const heading = modeRef.current === "heading" && courseRef.current != null ? courseRef.current : 0;
       mapRef.current?.animateCamera(
-        { center: { latitude: pos.lat, longitude: pos.lng }, zoom: zoomRef.current },
+        { center: { latitude: pos.lat, longitude: pos.lng }, zoom: zoomRef.current, heading, pitch: 0 },
         { duration }
       );
     },
     [mapRef]
   );
+
+  // Call with every fix: works out which way you're going -- the GPS
+  // heading when you're moving, otherwise the direction you've actually
+  // travelled -- and returns it (null until known) for your car icon.
+  const trackCourse = useCallback((pos: LatLng, gpsHeading?: number | null, speedKmh?: number | null) => {
+    const moving = speedKmh == null || speedKmh >= COURSE_MIN_KMH;
+    if (gpsHeading != null && gpsHeading >= 0 && moving) {
+      courseRef.current = gpsHeading;
+      courseAnchorRef.current = pos;
+    } else if (!courseAnchorRef.current) {
+      courseAnchorRef.current = pos;
+    } else if (metersBetween(courseAnchorRef.current, pos) >= COURSE_MIN_MOVE_M) {
+      courseRef.current = bearingDeg(courseAnchorRef.current, pos);
+      courseAnchorRef.current = pos;
+    }
+    return courseRef.current;
+  }, []);
+
+  // The compass button: heading-up <-> north-up.
+  const toggleMode = useCallback(() => {
+    const next: CameraMode = modeRef.current === "heading" ? "north" : "heading";
+    publishMode(next);
+    modeRef.current = next;
+    const p = lastPosRef.current;
+    if (p && followingRef.current) moveTo(p, 300);
+    else
+      mapRef.current?.animateCamera(
+        { heading: next === "heading" && courseRef.current != null ? courseRef.current : 0 },
+        { duration: 300 }
+      );
+  }, [mapRef, moveTo]);
 
   // Call with every new position. Keeps you centred unless you've panned
   // away (or have a finger on the map right now).
@@ -201,6 +277,9 @@ export function useFollowCamera(
   return {
     zoom,
     viewLabel: viewLabelFor(zoom),
+    mode,
+    toggleMode,
+    trackCourse,
     following,
     follow,
     recenter,

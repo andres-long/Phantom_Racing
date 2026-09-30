@@ -29,7 +29,7 @@ import { RACE_DIRECTIONS } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { cleanSpeedKmh, useStaleSpeedReset } from "../utils/speed";
 import NeonButton from "../components/NeonButton";
-import { CameraButton, TargetButton } from "../components/MapCameraButtons";
+import { CameraButton, TargetButton, CompassButton } from "../components/MapCameraButtons";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import { feedTrackTimer } from "../trackTimer";
 import { goToTrackStart } from "../goToTrack";
@@ -306,7 +306,16 @@ export default function HomeScreen({ navigation, route }: Props) {
         // pointing the last known direction instead of snapping to
         // north.
         const validHeading = loc.coords.heading != null && loc.coords.heading >= 0 ? loc.coords.heading : null;
-        if (validHeading != null) {
+        // Your car icon points the way you're going: the GPS heading while
+        // moving, otherwise the direction you've actually travelled.
+        if (live) {
+          const course = camera.trackCourse(
+            pos,
+            validHeading,
+            loc.coords.speed != null && loc.coords.speed >= 0 ? loc.coords.speed * 3.6 : null
+          );
+          if (course != null) setHeading(course);
+        } else if (validHeading != null) {
           setHeading(validHeading);
         }
         latestPosRef.current = { coords: pos, heading: validHeading };
@@ -919,6 +928,11 @@ export default function HomeScreen({ navigation, route }: Props) {
         </Text>
       </Pressable>
 
+      <CompassButton
+        mode={camera.mode}
+        onPress={camera.toggleMode}
+        style={{ position: "absolute", right: 16, bottom: hudBottom + 214 }}
+      />
       <CameraButton
         viewLabel={camera.viewLabel}
         onPress={camera.cycleView}

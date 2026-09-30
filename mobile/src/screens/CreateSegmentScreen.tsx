@@ -142,7 +142,10 @@ export default function CreateSegmentScreen({ navigation }: Props) {
 
     const last = points[points.length - 1];
     setMyPos({ lat: last.lat, lng: last.lng });
-    if (last.heading != null) setHeading(last.heading);
+    // Which way you're going -- the car icon points along it (and, heading-up,
+    // so does the map).
+    const course = camera.trackCourse({ lat: last.lat, lng: last.lng }, last.heading, last.speedKmh);
+    if (course != null) setHeading(course);
     presencePosRef.current = { coords: { lat: last.lat, lng: last.lng }, heading: last.heading ?? null };
     setSpeedKmh(last.speedKmh);
     markFix();
@@ -276,6 +279,8 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         following={camera.following}
         onCycleView={camera.cycleView}
         onRecenter={() => camera.recenter(myPos)}
+        mode={camera.mode}
+        onToggleMode={camera.toggleMode}
       />
 
       <View style={[styles.hud, { top: insets.top + 20 }]}>

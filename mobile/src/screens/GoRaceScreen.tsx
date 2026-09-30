@@ -54,7 +54,7 @@ const ARRIVAL_RADIUS_M = 40;
 // actually headed. Recording starts the moment this screen mounts -- by the
 // time you're here you already tapped START on GoToScreen's preview.
 export default function GoRaceScreen({ route, navigation }: Props) {
-  const { destinationName, destination, route: initialRoute, distanceM: initialDistanceM, durationS } =
+  const { destinationName, destination, route: initialRoute, distanceM: initialDistanceM, durationS, trackId, trackName } =
     route.params;
   const { user, vehicleStyle, units } = useUser();
   const insets = useSafeAreaInsets();
@@ -122,7 +122,9 @@ export default function GoRaceScreen({ route, navigation }: Props) {
     cumDistRef.current = cumulativeDistances(plannedRoute);
   }, [plannedRoute]);
 
-  const finishTrip = async (finalTrace: TracePoint[]) => {
+  // `arrived`: reached the destination (not ended by hand). On a drive to a
+  // track's start line that means you're there -- straight into racing it.
+  const finishTrip = async (finalTrace: TracePoint[], arrived = false) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
     await stopBackgroundTracking("trip");
@@ -143,14 +145,25 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         maxSpeedRef.current,
         durationS
       );
+      if (trackId && arrived) {
+        navigation.replace("RecordRun", { segmentId: trackId });
+        return;
+      }
       navigation.replace("GoSummary", {
         result,
         route: resamplePolyline(
           finalTrace.map((p) => ({ lat: p.lat, lng: p.lng })),
           300
         ),
+        trackId,
+        trackName,
       });
     } catch (e: any) {
+      // The drive there didn't save -- no matter, you're at the track.
+      if (trackId && arrived) {
+        navigation.replace("RecordRun", { segmentId: trackId });
+        return;
+      }
       Alert.alert("Trip not saved", e.message || "Unknown error", [
         { text: "OK", onPress: () => navigation.goBack() },
       ]);
@@ -225,7 +238,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
 
       const distToDestM = haversine({ lat: last.lat, lng: last.lng }, destination);
       if (distToDestM <= ARRIVAL_RADIUS_M && elapsed >= 5000 && next.length >= 3) {
-        finishTrip(next);
+        finishTrip(next, true);
       }
       return next;
     });

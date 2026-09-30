@@ -401,9 +401,13 @@ export type RootStackParamList = {
     route: LatLng[];
     distanceM: number;
     durationS: number;
+    // Driving to a track's start line: on arrival you go straight into
+    // racing it.
+    trackId?: string;
+    trackName?: string;
   };
   // `route`: the line you drove, for sharing the trip.
-  GoSummary: { result: SubmitTripResponse; route?: LatLng[] };
+  GoSummary: { result: SubmitTripResponse; route?: LatLng[]; trackId?: string; trackName?: string };
   Stats: undefined;
   RaceLive: { raceId: string };
   SoloRun: { distanceKey: RaceDistanceKey; directionKey: RaceDirectionKey; shape?: SoloShape };

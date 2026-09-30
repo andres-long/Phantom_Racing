@@ -17,7 +17,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "GoSummary">;
 // happened to be, just how the actual drive compared to Google's ETA from
 // before you left.
 export default function GoSummaryScreen({ route, navigation }: Props) {
-  const { result, route: drivenLine } = route.params;
+  const { result, route: drivenLine, trackId, trackName } = route.params;
   const { units } = useUser();
   const beatEstimate = result.deltaMs != null ? result.deltaMs <= 0 : null;
 
@@ -45,6 +45,13 @@ export default function GoSummaryScreen({ route, navigation }: Props) {
         Top speed: {displaySpeedKmh(result.maxSpeedKmh, units)} {speedUnit(units)}
       </Text>
 
+      {trackId && (
+        <NeonButton
+          label={`RACE ${trackName ? trackName.toUpperCase() : "THE TRACK"}`}
+          onPress={() => navigation.replace("RecordRun", { segmentId: trackId })}
+          style={styles.button}
+        />
+      )}
       <NeonButton
         label="SHARE"
         onPress={() =>

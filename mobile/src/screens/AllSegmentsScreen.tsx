@@ -11,6 +11,7 @@ import { formatDistanceShort, formatDistanceLong } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import NeonButton from "../components/NeonButton";
 import TrackPreview from "../components/TrackPreview";
+import { goToTrackStart } from "../goToTrack";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AllSegments">;
 
@@ -29,6 +30,7 @@ export default function AllSegmentsScreen({ navigation }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [goingToId, setGoingToId] = useState<string | null>(null);
 
   const load = useCallback(
     async (isRefresh: boolean) => {
@@ -170,6 +172,18 @@ export default function AllSegmentsScreen({ navigation }: Props) {
                   style={styles.cardButton}
                 />
               </View>
+              <View style={styles.cardActions}>
+              <NeonButton
+                label={goingToId === item.id ? "DIRECTIONS..." : "GO TO START"}
+                variant="outline"
+                disabled={goingToId != null}
+                onPress={async () => {
+                  setGoingToId(item.id);
+                  await goToTrackStart(navigation, item);
+                  setGoingToId(null);
+                }}
+                style={styles.cardButton}
+              />
               <NeonButton
                 label="SHARE"
                 variant="outline"
@@ -189,8 +203,9 @@ export default function AllSegmentsScreen({ navigation }: Props) {
                     trackId: item.id,
                   })
                 }
-                style={styles.shareButton}
+                style={styles.cardButton}
               />
+              </View>
               {isOwner && (
                 <NeonButton
                   label={
@@ -243,6 +258,5 @@ const styles = StyleSheet.create({
   cardMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
   cardActions: { flexDirection: "row", marginTop: 14, gap: 10 },
   cardButton: { flex: 1 },
-  shareButton: { marginTop: 10 },
   privacyButton: { marginTop: 4 },
 });

@@ -32,6 +32,7 @@ import NeonButton from "../components/NeonButton";
 import { CameraButton, TargetButton } from "../components/MapCameraButtons";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import { feedTrackTimer } from "../trackTimer";
+import { goToTrackStart } from "../goToTrack";
 import VehicleMarker from "../components/VehicleMarker";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
@@ -179,6 +180,7 @@ export default function HomeScreen({ navigation, route }: Props) {
   const [soloStep, setSoloStep] = useState<"closed" | "distance" | "shape" | "direction">("closed");
   const [soloDistanceKey, setSoloDistanceKey] = useState<RaceDistanceKey | null>(null);
   const [soloShape, setSoloShape] = useState<SoloShape>("sprint");
+  const [goingTo, setGoingTo] = useState(false);
 
 
   // Presence (live location sharing) plumbing. All refs, not state, because
@@ -1023,6 +1025,20 @@ export default function HomeScreen({ navigation, route }: Props) {
               style={styles.cardButton}
             />
           </View>
+          {/* Turn-by-turn to the start line, then straight into racing it. */}
+          {!busy && (
+            <NeonButton
+              label={goingTo ? "GETTING DIRECTIONS..." : "GO TO THE START"}
+              variant="outline"
+              disabled={goingTo}
+              onPress={async () => {
+                setGoingTo(true);
+                await goToTrackStart(navigation, selected);
+                setGoingTo(false);
+              }}
+              style={styles.goToButton}
+            />
+          )}
         </View>
       )}
 
@@ -1452,6 +1468,7 @@ const styles = StyleSheet.create({
   cardMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
   cardActions: { flexDirection: "row", marginTop: 14, gap: 10 },
   cardButton: { flex: 1 },
+  goToButton: { marginTop: 10 },
   racerRow: {
     flexDirection: "row",
     alignItems: "center",

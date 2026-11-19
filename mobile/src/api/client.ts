@@ -30,6 +30,7 @@ import {
   SoloStatsResponse,
   SoloShape,
   CheckpointsResponse,
+  Car,
 } from "../types";
 
 // Points at the deployed backend (Render), so the app works over any
@@ -108,6 +109,13 @@ export const api = {
         deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ""
       }`
     ),
+
+  // Your car (null clears it).
+  setCar: (deviceId: string, car: Car | null) =>
+    request<User>(`/api/users/${deviceId}/car`, {
+      method: "PUT",
+      body: JSON.stringify({ car }),
+    }),
 
   updateDisplayName: (deviceId: string, displayName: string) =>
     request<User>(`/api/users/${deviceId}`, {

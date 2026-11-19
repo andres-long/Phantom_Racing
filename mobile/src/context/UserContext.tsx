@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { api } from "../api/client";
-import { User } from "../types";
+import { User, Car } from "../types";
 import { VehicleStyle } from "../components/VehicleMarker";
 import { Units } from "../utils/units";
 import { setTopSpeedUser } from "../topSpeed";
@@ -21,6 +21,7 @@ type UserContextValue = {
   register: (name: string, password: string) => Promise<void>;
   login: (name: string, password: string) => Promise<void>;
   setDisplayName: (name: string) => Promise<void>;
+  setCar: (car: Car | null) => Promise<void>;
   setVehicleStyle: (style: VehicleStyle) => Promise<void>;
   setIncognito: (value: boolean) => Promise<void>;
   setVoiceEnabled: (value: boolean) => Promise<void>;
@@ -146,6 +147,12 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     await persistUser(updated);
   };
 
+  const setCar = async (car: Car | null) => {
+    if (!user) return;
+    const updated = await api.setCar(user.deviceId, car);
+    await persistUser({ ...user, ...updated });
+  };
+
   const logOut = async () => {
     await AsyncStorage.removeItem(ACCOUNT_KEY);
     setUser(null);
@@ -203,6 +210,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         register,
         login,
         setDisplayName,
+        setCar,
         setVehicleStyle,
         setIncognito,
         setVoiceEnabled,

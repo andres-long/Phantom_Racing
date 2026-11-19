@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, TextInput, Alert, Switch, ActivityIndicator, Pressable } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -8,7 +8,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, LatLng, PresenceUser } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
-import { polylineLength } from "../utils/geo";
+import { polylineLength, thinForDisplay } from "../utils/geo";
 import { displaySpeedKmh, speedUnit } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -44,6 +44,14 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [recording, setRecording] = useState(false);
   const [trace, setTrace] = useState<TracePoint[]>([]);
+  // The line drawn on the map: thinned, and only redrawn every few points,
+  // so an hour-long recording doesn't bog the phone down.
+  const drawBucket = trace.length < 8 ? trace.length : Math.floor(trace.length / 4);
+  const drawnTrace = useMemo(
+    () => thinForDisplay(trace).map((p) => ({ latitude: p.lat, longitude: p.lng })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [drawBucket]
+  );
   const [myPos, setMyPos] = useState<LatLng | null>(null);
   const [locationReady, setLocationReady] = useState(false);
   const [heading, setHeading] = useState(0);
@@ -255,7 +263,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
       >
         {trace.length > 1 && (
           <Polyline
-            coordinates={trace.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+            coordinates={drawnTrace}
             strokeColor={colors.cyan}
             strokeWidth={5}
           />

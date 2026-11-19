@@ -20,12 +20,6 @@ export default function DisclaimerScreen() {
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>BEFORE YOU RACE</Text>
         <Text style={styles.paragraph}>
-          This app times you against your own or other drivers' recorded runs on stretches of
-          road ("segments") -- like a leaderboard. If another racer is nearby and online, you can
-          also challenge them directly to a live race, so you may share the road with your
-          opponent at the same time -- treat that exactly like any other traffic around you.
-        </Text>
-        <Text style={styles.paragraph}>
           Obey all traffic laws and speed limits at all times. Never look at your phone while
           driving -- mount it, use voice/audio cues, or have a passenger watch it. Your safety
           and everyone else's on the road comes first, always. This app will never ask you to

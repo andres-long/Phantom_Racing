@@ -41,7 +41,14 @@ const MODE_KEY = "phantom.cameraMode";
 // Course is only trusted from the GPS above this speed; below it (or with
 // no GPS heading) it comes from how you've actually moved.
 const COURSE_MIN_KMH = 4;
-const COURSE_MIN_MOVE_M = 5;
+const COURSE_GPS_MIN_KMH = 10;
+const COURSE_MIN_MOVE_M = 8;
+
+// Smallest angle between two compass bearings, 0-180.
+function angleDiff(a: number, b: number) {
+  const d = Math.abs(((a - b) % 360) + 360) % 360;
+  return d > 180 ? 360 - d : d;
+}
 
 let sharedZoom = DEFAULT_FOLLOW_ZOOM;
 let sharedMode: CameraMode = "heading";
@@ -164,17 +171,28 @@ export function useFollowCamera(
   // Call with every fix: works out which way you're going -- the GPS
   // heading when you're moving, otherwise the direction you've actually
   // travelled -- and returns it (null until known) for your car icon.
+  // Which way you're actually moving, from your last ~8 m of travel.
+  const moveBearingRef = useRef<number | null>(null);
+
   const trackCourse = useCallback((pos: LatLng, gpsHeading?: number | null, speedKmh?: number | null) => {
-    const moving = speedKmh == null || speedKmh >= COURSE_MIN_KMH;
-    if (gpsHeading != null && gpsHeading >= 0 && moving) {
-      courseRef.current = gpsHeading;
-      courseAnchorRef.current = pos;
-    } else if (!courseAnchorRef.current) {
-      courseAnchorRef.current = pos;
-    } else if (metersBetween(courseAnchorRef.current, pos) >= COURSE_MIN_MOVE_M) {
-      courseRef.current = bearingDeg(courseAnchorRef.current, pos);
+    // Movement bearing: always kept up to date, it's the ground truth.
+    if (!courseAnchorRef.current) courseAnchorRef.current = pos;
+    else if (metersBetween(courseAnchorRef.current, pos) >= COURSE_MIN_MOVE_M) {
+      moveBearingRef.current = bearingDeg(courseAnchorRef.current, pos);
       courseAnchorRef.current = pos;
     }
+    const move = moveBearingRef.current;
+    // Many Android phones report a heading of exactly 0 when they have no
+    // bearing at all -- that pinned the car pointing north. So 0 only counts
+    // if the way we're moving agrees, and any GPS heading that disagrees
+    // with the movement by a lot loses to the movement.
+    const fastEnough = speedKmh == null || speedKmh >= COURSE_GPS_MIN_KMH;
+    let gps = gpsHeading != null && gpsHeading >= 0 && fastEnough ? gpsHeading : null;
+    if (gps === 0 && (move == null || angleDiff(move, 0) > 45)) gps = null;
+    if (gps != null && move != null && angleDiff(gps, move) > 70) gps = null;
+
+    if (gps != null) courseRef.current = gps;
+    else if (move != null && (speedKmh == null || speedKmh >= COURSE_MIN_KMH)) courseRef.current = move;
     return courseRef.current;
   }, []);
 

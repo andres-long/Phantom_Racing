@@ -18,6 +18,7 @@ export type LeaderboardEntry = {
   runId: string;
   userId: string;
   displayName: string;
+  car?: Car | null;
   durationMs: number;
   avgSpeedKmh: number;
   maxSpeedKmh: number;
@@ -78,11 +79,15 @@ export type CreateSegmentResponse = SegmentSummary & {
   runError: string | null;
 };
 
+// The car you drive -- for HP-matched racing and to show by your name.
+export type Car = { make: string; model: string; hp: number };
+
 export type User = {
   id: string;
   deviceId: string;
   displayName: string;
   createdAt: string;
+  car?: Car | null;
 };
 
 // ---- "Go To a place" (destination search + turn-by-turn + tracked trip) --
@@ -121,6 +126,7 @@ export type SubmitTripResponse = {
 export type PresenceUser = {
   deviceId: string;
   displayName: string;
+  car?: Car | null;
   lat: number;
   lng: number;
   heading: number | null;
@@ -193,6 +199,7 @@ export type RaceChallenge = {
   fromDisplayName: string;
   toDisplayName: string;
   opponentDisplayName: string;
+  opponentCar?: Car | null;
   myProgress: RaceProgress | null;
   opponentProgress: RaceProgress | null;
   myResult: RaceResult | null;
@@ -291,6 +298,7 @@ export type GlobalStatsEntry = {
   rank: number;
   isMe: boolean;
   displayName: string;
+  car?: Car | null;
   topSpeedKmh: number;
   distanceM: number;
   avgSpeedKmh: number;

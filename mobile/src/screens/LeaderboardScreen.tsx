@@ -8,6 +8,7 @@ import { formatDuration } from "../utils/geo";
 import { displaySpeedKmh, speedUnit } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
+import { carLabel } from "../utils/car";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Leaderboard">;
 
@@ -43,7 +44,10 @@ export default function LeaderboardScreen({ route }: Props) {
           <View style={[styles.row, item.rank === 1 && styles.rowLeader]}>
             <Text style={[styles.rank, item.rank === 1 && styles.rankLeader]}>#{item.rank}</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.name}>{item.displayName}</Text>
+              <Text style={styles.name}>
+                {item.displayName}
+                {item.car ? <Text style={styles.car}>{`  ${carLabel(item.car)}`}</Text> : null}
+              </Text>
               <Text style={styles.meta}>
                 {displaySpeedKmh(item.avgSpeedKmh, units)} {speedUnit(units)} avg . {displaySpeedKmh(item.maxSpeedKmh, units)}{" "}
                 {speedUnit(units)} top
@@ -81,4 +85,5 @@ const styles = StyleSheet.create({
   name: { color: colors.textPrimary, fontWeight: "600", fontSize: 15 },
   meta: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
   time: { color: colors.textPrimary, fontFamily: fonts.heading, fontSize: 15 },
+  car: { color: colors.textMuted, fontSize: 11, fontWeight: "600" },
 });

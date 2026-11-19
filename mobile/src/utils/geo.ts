@@ -116,6 +116,20 @@ export function advanceAlongPolyline(
   return { distanceAlongM: Math.max(prevM, best.along), lateralDistanceM: best.lateral };
 }
 
+/**
+ * At most `max` points for drawing a line on the map -- every Nth point plus
+ * the last. A long recording otherwise sends thousands of points to the
+ * native map on every GPS fix, which bogs the phone down on long drives.
+ */
+export function thinForDisplay<T extends LatLng>(points: T[], max = 1200): T[] {
+  if (points.length <= max) return points;
+  const stride = Math.ceil(points.length / max);
+  const out: T[] = [];
+  for (let i = 0; i < points.length; i += stride) out.push(points[i]);
+  if (out[out.length - 1] !== points[points.length - 1]) out.push(points[points.length - 1]);
+  return out;
+}
+
 /** Window ahead to search, given the time since the last fix (fixes can
  *  bunch up or pause -- a tunnel, a locked phone). */
 export function aheadWindowM(gapMs: number): number {

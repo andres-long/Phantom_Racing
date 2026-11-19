@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Alert } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -8,7 +8,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList, LatLng, PresenceUser } from "../types";
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
-import { cumulativeDistances, projectOntoPolyline, haversine, formatDuration, resamplePolyline } from "../utils/geo";
+import { cumulativeDistances, projectOntoPolyline, haversine, formatDuration, resamplePolyline, thinForDisplay } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -60,6 +60,10 @@ export default function GoRaceScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
 
   const [plannedRoute, setPlannedRoute] = useState<LatLng[]>(initialRoute);
+  const plannedCoords = useMemo(
+    () => thinForDisplay(plannedRoute).map((p) => ({ latitude: p.lat, longitude: p.lng })),
+    [plannedRoute]
+  );
   const [rerouting, setRerouting] = useState(false);
   const [trace, setTrace] = useState<TracePoint[]>([]);
   const [myPos, setMyPos] = useState<LatLng | null>(null);
@@ -337,7 +341,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         }}
       >
         <Polyline
-          coordinates={plannedRoute.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+          coordinates={plannedCoords}
           strokeColor={colors.cyan}
           strokeWidth={4}
         />

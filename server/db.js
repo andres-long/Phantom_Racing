@@ -250,6 +250,7 @@ async function queryPresenceMongo({ excludeDeviceId, bounds, maxAgeMs, requireVo
   return docs.map((d) => ({
     deviceId: d._id,
     displayName: d.displayName,
+    car: d.car || null,
     lat: d.lat,
     lng: d.lng,
     heading: d.heading,

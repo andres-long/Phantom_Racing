@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Alert, ActivityIndicator } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -54,6 +54,10 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
 
   const [segment, setSegment] = useState<SegmentSummary | null>(null);
+  const segmentCoords = useMemo(
+    () => (segment ? segment.points.map((p) => ({ latitude: p.lat, longitude: p.lng })) : []),
+    [segment]
+  );
   const [ghost, setGhost] = useState<GhostProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -383,7 +387,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         }}
       >
         <Polyline
-          coordinates={segment.points.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+          coordinates={segmentCoords}
           strokeColor={colors.cyan}
           strokeWidth={4}
         />

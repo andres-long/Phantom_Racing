@@ -21,6 +21,7 @@ import { colors, fonts, panelStyle } from "../theme";
 import GridBackground from "../components/GridBackground";
 import NeonButton from "../components/NeonButton";
 import VehicleMarker, { VEHICLE_STYLES, VehicleStyle } from "../components/VehicleMarker";
+import { openBatterySettings } from "../backgroundLocation";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Username">;
 
@@ -171,8 +172,31 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
     setVoiceEnabled,
     units,
     setUnits,
+    setCar,
   } = useUser();
   const insets = useSafeAreaInsets();
+  // Your car, for HP-matched racing.
+  const [carMake, setCarMake] = useState(user?.car?.make ?? "");
+  const [carModel, setCarModel] = useState(user?.car?.model ?? "");
+  const [carHp, setCarHp] = useState(user?.car?.hp ? String(user.car.hp) : "");
+  const [savingCar, setSavingCar] = useState(false);
+
+  const onSaveCar = async () => {
+    const hp = Math.round(Number(carHp));
+    if (!Number.isFinite(hp) || hp < 1 || hp > 2000) {
+      Alert.alert("Horsepower", "Enter your car's horsepower as a number, like 300.");
+      return;
+    }
+    setSavingCar(true);
+    try {
+      await setCar({ make: carMake.trim(), model: carModel.trim(), hp });
+      Alert.alert("Car saved", `${hp} HP -- you'll be matched with cars within 20% of that.`);
+    } catch (e: any) {
+      Alert.alert("Couldn't save your car", e.message || "Try again.");
+    } finally {
+      setSavingCar(false);
+    }
+  };
   const [name, setName] = useState(user?.displayName ?? "");
   const [saving, setSaving] = useState(false);
   // Skip the check while the box still holds your current name (exactly).
@@ -281,6 +305,60 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
           style={styles.submitButton}
         />
 
+        {/* Your car: HP-matched racing pairs you with cars within 20% of
+            your horsepower; free range races anyone. */}
+        <Text style={styles.sectionLabel}>YOUR CAR</Text>
+        <Text style={styles.subtitle}>
+          Used for HP-matched races -- you'll see who's within 20% of your horsepower. It also shows next to your
+          name on the boards.
+        </Text>
+        <View style={styles.carRow}>
+          <TextInput
+            style={[styles.input, styles.carInput]}
+            placeholder="Make (e.g. Ford)"
+            placeholderTextColor={colors.textMuted}
+            value={carMake}
+            onChangeText={setCarMake}
+            maxLength={30}
+          />
+          <TextInput
+            style={[styles.input, styles.carInput]}
+            placeholder="Model (e.g. Mustang GT)"
+            placeholderTextColor={colors.textMuted}
+            value={carModel}
+            onChangeText={setCarModel}
+            maxLength={40}
+          />
+        </View>
+        <TextInput
+          style={styles.input}
+          placeholder="Horsepower (e.g. 450)"
+          placeholderTextColor={colors.textMuted}
+          value={carHp}
+          onChangeText={(t) => setCarHp(t.replace(/[^0-9]/g, ""))}
+          keyboardType="number-pad"
+          maxLength={4}
+        />
+        <NeonButton
+          label={savingCar ? "SAVING..." : "SAVE CAR"}
+          onPress={onSaveCar}
+          disabled={savingCar}
+          variant="outline"
+          style={styles.submitButton}
+        />
+
+        <Text style={styles.sectionLabel}>LONG DRIVES</Text>
+        <Text style={styles.subtitle}>
+          If a long recording stops on its own, your phone's battery saver is closing the app. Set Phantom Racing's
+          battery use to "Unrestricted".
+        </Text>
+        <NeonButton
+          label="BATTERY SETTINGS"
+          variant="outline"
+          onPress={openBatterySettings}
+          style={styles.submitButton}
+        />
+
         <Text style={styles.sectionLabel}>MAP MARKER</Text>
         <Text style={styles.subtitle}>What marks your position on the map while you drive.</Text>
         <View style={styles.vehicleRow}>
@@ -383,6 +461,8 @@ function AccountView({ navigation }: { navigation: Props["navigation"] }) {
 }
 
 const styles = StyleSheet.create({
+  carRow: { flexDirection: "row", gap: 8 },
+  carInput: { flex: 1 },
   container: { flex: 1, backgroundColor: colors.bg },
   content: { flex: 1, padding: 20, justifyContent: "center" },
   scrollContent: { flexGrow: 1, padding: 20, paddingTop: 24 },

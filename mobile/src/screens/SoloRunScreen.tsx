@@ -8,7 +8,7 @@ import { RootStackParamList, LatLng, SoloRun, SoloFinishResponse } from "../type
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
-import { formatDuration, cumulativeDistances, advanceAlongPolyline, aheadWindowM } from "../utils/geo";
+import { formatDuration, cumulativeDistances } from "../utils/geo";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -25,6 +25,7 @@ import { usePresenceHeartbeat, PresencePositionRef } from "../hooks/usePresenceH
 import { directionalProgressM } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { useStaleSpeedReset } from "../utils/speed";
+import { CourseFollower } from "../courseFollower";
 import { feedTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import MapCameraControls from "../components/MapCameraButtons";
@@ -76,6 +77,8 @@ export default function SoloRunScreen({ route, navigation }: Props) {
   const maxSpeedRef = useRef(0);
   const finishedRef = useRef(false);
   const lastFixTRef = useRef(0);
+  const followerRef = useRef<CourseFollower | null>(null);
+  const [rerouting, setRerouting] = useState(false);
   const camera = useFollowCamera(mapRef);
   const presencePosRef: PresencePositionRef = useRef(null);
   usePresenceHeartbeat(presencePosRef);
@@ -175,20 +178,26 @@ export default function SoloRunScreen({ route, navigation }: Props) {
 
     camera.follow(pos);
     if (last.speedKmh > maxSpeedRef.current) maxSpeedRef.current = last.speedKmh;
-    if (courseRef.current && courseRef.current.length >= 2) {
-      // How far round the course you are, fix by fix: never backwards, and
-      // a loop's start can't be mistaken for its finish (they're the same
-      // spot) -- see advanceAlongPolyline.
+    const follower = followerRef.current;
+    if (follower) {
+      // How far towards the finish you are, fix by fix (never backwards,
+      // and a loop's start can't be mistaken for its finish). Off the
+      // course? It lays a new one from where you are -- see CourseFollower.
+      let reachedEnd = false;
+      let wantsReroute = false;
       for (const p of points) {
-        const gap = lastFixTRef.current ? p.t - lastFixTRef.current : 1000;
-        lastFixTRef.current = p.t;
-        distanceRef.current = advanceAlongPolyline(
-          courseRef.current,
-          courseCumRef.current,
-          { lat: p.lat, lng: p.lng },
-          distanceRef.current,
-          aheadWindowM(gap)
-        ).distanceAlongM;
+        const u = follower.update({ lat: p.lat, lng: p.lng }, p.t);
+        distanceRef.current = u.coveredM;
+        if (u.finished) reachedEnd = true;
+        if (u.needsReroute) wantsReroute = true;
+      }
+      if (reachedEnd) distanceRef.current = targetRef.current;
+      if (wantsReroute && !reachedEnd) {
+        setRerouting(true);
+        follower.reroute(pos).then((changed) => {
+          setRerouting(false);
+          if (changed && !finishedRef.current) setCourse(follower.points);
+        });
       }
     } else {
       // No road course: progress along the chosen compass direction.
@@ -238,6 +247,10 @@ export default function SoloRunScreen({ route, navigation }: Props) {
       startedAtRef.current = Date.now();
       distanceRef.current = 0;
       lastFixTRef.current = 0;
+      followerRef.current =
+        courseRef.current && courseRef.current.length >= 2
+          ? new CourseFollower(courseRef.current, targetRef.current, isLoop)
+          : null;
       maxSpeedRef.current = 0;
       startPointRef.current = null;
       go("running");
@@ -435,7 +448,9 @@ export default function SoloRunScreen({ route, navigation }: Props) {
           <Text style={styles.speed}>
             {displaySpeedKmh(speedKmh, units)} {speedUnit(units)}
             {"   "}
-            <Text style={styles.remaining}>{formatDistanceShort(Math.max(0, target - distanceM), units)} to go</Text>
+            <Text style={styles.remaining}>
+              {rerouting ? "NEW ROUTE TO THE FINISH..." : `${formatDistanceShort(Math.max(0, target - distanceM), units)} to go`}
+            </Text>
           </Text>
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${progressPct * 100}%` }]} />

@@ -76,11 +76,9 @@ export default function WelcomeScreen({ navigation }: Props) {
         <View style={styles.step}>
           <Text style={styles.stepWarn}>!</Text>
           <View style={styles.stepBody}>
-            <Text style={styles.stepTitle}>This isn't a live race</Text>
+            <Text style={styles.stepTitle}>Drive safe</Text>
             <Text style={styles.stepText}>
-              You never share the road with your "opponent" at the same moment -- you're racing
-              a recorded time, not another car next to you. Obey traffic laws and speed limits
-              always, and never touch your phone while driving.
+              Obey traffic laws and speed limits always, and never touch your phone while driving.
             </Text>
           </View>
         </View>

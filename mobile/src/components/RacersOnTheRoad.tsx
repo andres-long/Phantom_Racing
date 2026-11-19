@@ -36,6 +36,7 @@ export function RacerMarkers({
             <View style={styles.label}>
               <Text style={styles.labelText} numberOfLines={1}>
                 {u.displayName}
+                {u.car ? ` -- ${u.car.hp} HP` : ""}
               </Text>
             </View>
           </View>
@@ -64,7 +65,9 @@ export function IncomingRaceCard({
     <View style={[styles.card, style]}>
       <Text style={styles.title}>Race request!</Text>
       <Text style={styles.meta}>
-        {race.opponentDisplayName} wants to race you -- {race.distanceLabel} {race.directionLabel}. Your recording
+        {race.opponentDisplayName}
+        {race.opponentCar ? ` (${race.opponentCar.hp} HP)` : ""} wants to race you -- {race.distanceLabel}{" "}
+        {race.directionLabel}. Your recording
         keeps going while you race.
       </Text>
       <View style={styles.actions}>

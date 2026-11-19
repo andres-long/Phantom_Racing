@@ -213,7 +213,37 @@ function verifyPassword(password, stored) {
 // The subset of a user record that's safe to send to the client --
 // never the password hash.
 function publicUser(user) {
-  return { id: user.id, deviceId: user.deviceId, displayName: user.displayName, createdAt: user.createdAt };
+  return {
+    id: user.id,
+    deviceId: user.deviceId,
+    displayName: user.displayName,
+    createdAt: user.createdAt,
+    car: user.car || null,
+  };
+}
+
+// The car you drive -- make, model and horsepower -- for HP-matched races
+// and to show next to your name. Everything optional except a sane HP.
+const MAX_CAR_HP = 2000;
+function sanitizeCar(body) {
+  if (!body || body.car === null) return null;
+  const src = body.car || body;
+  const hp = Math.round(Number(src.hp));
+  if (!Number.isFinite(hp) || hp < 1 || hp > MAX_CAR_HP) return undefined;
+  const clean = (v, max) =>
+    String(v == null ? "" : v)
+      .normalize("NFKC")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, max);
+  return { make: clean(src.make, 30), model: clean(src.model, 40), hp };
+}
+
+// "350 HP" or "Mustang GT -- 450 HP", for showing on boards.
+function carSummary(car) {
+  if (!car) return null;
+  return { make: car.make || "", model: car.model || "", hp: car.hp };
 }
 
 // Nothing on a public road gets past this, so anything above it is a GPS
@@ -604,6 +634,7 @@ function raceSummary(dbState, race, viewerUserId, { includeCourse = false } = {}
     fromDisplayName: fromUser?.displayName ?? "Unknown",
     toDisplayName: toUser?.displayName ?? "Unknown",
     opponentDisplayName: opponentUser?.displayName ?? "Unknown",
+    opponentCar: carSummary(opponentUser?.car),
     myProgress: race.progress?.[viewerUserId] ?? null,
     opponentProgress: race.progress?.[opponentId] ?? null,
     // The course is only sent where it's needed (loading the race screen).
@@ -777,6 +808,20 @@ route("PATCH", "/api/users/:deviceId", async ({ res, params, body }) => {
   });
 });
 
+// Set (or, with car: null, clear) the car you drive.
+route("PUT", "/api/users/:deviceId/car", async ({ res, params, body }) => {
+  const car = sanitizeCar(body);
+  if (car === undefined) {
+    return sendJson(res, 400, { error: `Horsepower must be a whole number from 1 to ${MAX_CAR_HP}.` });
+  }
+  const state = await db.load();
+  const user = findUserByDevice(state, params.deviceId);
+  if (!user) return sendJson(res, 404, { error: "User not found." });
+  user.car = car;
+  await db.save(state);
+  sendJson(res, 200, publicUser(user));
+});
+
 // List all segments with a leaderboard summary. `deviceId` is optional (an
 // anonymous/unauthenticated caller just sees public segments) -- when
 // present, it also gets back their own private segments alongside every
@@ -884,6 +929,7 @@ route("GET", "/api/segments/:id/leaderboard", async ({ res, params, query }) => 
       runId: r.id,
       userId: r.userId,
       displayName: state.users.find((u) => u.id === r.userId)?.displayName ?? "Unknown",
+      car: carSummary(state.users.find((u) => u.id === r.userId)?.car),
       durationMs: r.durationMs,
       avgSpeedKmh: r.avgSpeedKmh,
       maxSpeedKmh: r.maxSpeedKmh ?? 0,
@@ -1449,6 +1495,7 @@ function computeGlobalStats(state) {
     entries.push({
       userId,
       displayName: user.displayName,
+      car: carSummary(user.car),
       topSpeedKmh: Math.round(s.topSpeedKmh * 10) / 10,
       distanceM: Math.round(s.distanceM),
       avgSpeedKmh: s.durationMs > 0 ? Math.round((s.distanceM / 1000 / (s.durationMs / 3_600_000)) * 10) / 10 : 0,
@@ -1538,6 +1585,9 @@ route("POST", "/api/presence", async ({ res, body }) => {
   await db.upsertPresence({
     deviceId,
     displayName: user.displayName,
+    // Copied from the account each heartbeat, so HP-matched race picking
+    // sees everyone's car without another lookup.
+    car: carSummary(user.car),
     lat,
     lng,
     heading: Number.isFinite(headingNum) ? headingNum : null,

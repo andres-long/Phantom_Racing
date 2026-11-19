@@ -33,6 +33,7 @@ import { CameraButton, TargetButton, CompassButton } from "../components/MapCame
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import { feedTrackTimer } from "../trackTimer";
 import { goToTrackStart } from "../goToTrack";
+import { isHpMatch, carLabel } from "../utils/car";
 import VehicleMarker from "../components/VehicleMarker";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
@@ -176,6 +177,10 @@ export default function HomeScreen({ navigation, route }: Props) {
   // Racer picker (from the HUD's "N racers on the map" line), for when
   // there's more than one to choose between.
   const [pickingRacer, setPickingRacer] = useState(false);
+  // Racer picker: HP-matched (within 20% of your car) or free range.
+  const [matchMode, setMatchMode] = useState<"matched" | "free">(user?.car ? "matched" : "free");
+  const pickerRacers =
+    matchMode === "matched" && user?.car ? otherUsers.filter((u) => isHpMatch(user.car, u.car)) : otherUsers;
   // Solo run picker: distance, then direction, then off to SoloRunScreen.
   const [soloStep, setSoloStep] = useState<"closed" | "distance" | "shape" | "direction">("closed");
   const [soloDistanceKey, setSoloDistanceKey] = useState<RaceDistanceKey | null>(null);
@@ -778,10 +783,15 @@ export default function HomeScreen({ navigation, route }: Props) {
             }}
           >
             <View style={styles.otherUserWrap}>
-              <VehicleMarker vehicleStyle="arrow" size={28} color={colors.racePrimary} />
-              <View style={styles.otherUserLabel}>
+              <VehicleMarker
+                vehicleStyle="arrow"
+                size={28}
+                color={isHpMatch(user?.car, u.car) ? colors.gold : colors.racePrimary}
+              />
+              <View style={[styles.otherUserLabel, isHpMatch(user?.car, u.car) && styles.otherUserLabelMatch]}>
                 <Text style={styles.otherUserLabelText} numberOfLines={1}>
                   {u.displayName}
+                  {u.car ? ` -- ${u.car.hp} HP` : ""}
                 </Text>
               </View>
             </View>
@@ -1062,7 +1072,33 @@ export default function HomeScreen({ navigation, route }: Props) {
             <Text style={styles.cardCloseText}>x</Text>
           </Pressable>
           <Text style={styles.cardTitle}>Racers nearby</Text>
-          {otherUsers.map((u) => (
+          {/* HP-matched: cars within 20% of yours. Free range: anyone. */}
+          <View style={styles.matchRow}>
+            {(["matched", "free"] as const).map((m) => (
+              <Pressable
+                key={m}
+                style={[styles.matchChip, matchMode === m && styles.matchChipActive]}
+                onPress={() => setMatchMode(m)}
+              >
+                <Text style={[styles.matchChipText, matchMode === m && styles.matchChipTextActive]}>
+                  {m === "matched" ? "MATCHED HP" : "FREE RANGE"}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          {matchMode === "matched" && !user?.car && (
+            <Pressable onPress={() => navigation.navigate("Username")} hitSlop={6}>
+              <Text style={styles.matchHint}>Add your car's horsepower in your account to see HP matches.</Text>
+            </Pressable>
+          )}
+          {pickerRacers.length === 0 && (
+            <Text style={styles.matchHint}>
+              {matchMode === "matched"
+                ? "Nobody within 20% of your HP nearby right now -- try FREE RANGE."
+                : "No racers nearby right now."}
+            </Text>
+          )}
+          {pickerRacers.map((u) => (
             <Pressable
               key={u.deviceId}
               style={styles.racerRow}
@@ -1073,6 +1109,9 @@ export default function HomeScreen({ navigation, route }: Props) {
             >
               <Text style={styles.racerRowName} numberOfLines={1}>
                 {u.displayName}
+              </Text>
+              <Text style={[styles.racerRowHp, isHpMatch(user?.car, u.car) && styles.racerRowHpMatch]}>
+                {u.car ? `${u.car.hp} HP` : "-- HP"}
               </Text>
               <Text style={styles.racerRowGo}>{">"}</Text>
             </Pressable>
@@ -1094,6 +1133,10 @@ export default function HomeScreen({ navigation, route }: Props) {
             <Text style={styles.cardCloseText}>x</Text>
           </Pressable>
           <Text style={styles.cardTitle}>{selectedUser.displayName}</Text>
+          <Text style={[styles.cardMeta, isHpMatch(user?.car, selectedUser.car) && { color: colors.gold }]}>
+            {selectedUser.car ? carLabel(selectedUser.car) : "Car not set"}
+            {isHpMatch(user?.car, selectedUser.car) ? "  -- HP MATCH" : ""}
+          </Text>
 
           {raceStep === "closed" && (
             <>
@@ -1278,8 +1321,9 @@ export default function HomeScreen({ navigation, route }: Props) {
         <View style={[styles.incomingCard, { top: insets.top + 104 }]}>
           <Text style={styles.cardTitle}>Race request!</Text>
           <Text style={styles.cardMeta}>
-            {incomingRace.opponentDisplayName} wants to race you -- {incomingRace.distanceLabel}{" "}
-            {incomingRace.directionLabel}
+            {incomingRace.opponentDisplayName}
+            {incomingRace.opponentCar ? ` (${carLabel(incomingRace.opponentCar)})` : ""} wants to race you --{" "}
+            {incomingRace.distanceLabel} {incomingRace.directionLabel}
           </Text>
           <View style={styles.cardActions}>
             <NeonButton
@@ -1468,6 +1512,15 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   otherUserLabelText: { color: colors.textPrimary, fontSize: 10, fontWeight: "700" },
+  otherUserLabelMatch: { borderColor: colors.gold },
+  matchRow: { flexDirection: "row", gap: 8, marginTop: 8, marginBottom: 6 },
+  matchChip: { borderWidth: 1, borderColor: colors.panelBorder, borderRadius: 14, paddingVertical: 6, paddingHorizontal: 12 },
+  matchChipActive: { borderColor: colors.gold, backgroundColor: "rgba(255, 207, 61, 0.12)" },
+  matchChipText: { color: colors.textSecondary, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
+  matchChipTextActive: { color: colors.gold },
+  matchHint: { color: colors.textMuted, fontSize: 12, marginVertical: 6 },
+  racerRowHp: { color: colors.textSecondary, fontSize: 12, fontWeight: "700", marginRight: 10 },
+  racerRowHpMatch: { color: colors.gold },
   card: {
     position: "absolute",
     left: 16,

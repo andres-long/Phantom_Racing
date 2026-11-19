@@ -8,7 +8,8 @@ import { RootStackParamList, LatLng, RaceChallenge, RaceProgress } from "../type
 import { api } from "../api/client";
 import { useUser } from "../context/UserContext";
 import { useProximityVoiceContext } from "../context/ProximityVoiceContext";
-import { formatDuration, cumulativeDistances, advanceAlongPolyline, aheadWindowM, haversine } from "../utils/geo";
+import { formatDuration, cumulativeDistances, haversine } from "../utils/geo";
+import { CourseFollower } from "../courseFollower";
 import { displaySpeedKmh, speedUnit, formatDistanceShort } from "../utils/units";
 import { colors, fonts, panelStyle } from "../theme";
 import { tronMapStyle } from "../mapStyle";
@@ -75,6 +76,9 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   const [trace, setTrace] = useState<LatLng[]>([]);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [distanceCoveredM, setDistanceCoveredM] = useState(0);
+  // Laying a new course after you left the old one.
+  const [rerouting, setRerouting] = useState(false);
+  const followerRef = useRef<CourseFollower | null>(null);
   const [speedKmh, setSpeedKmh] = useState(0);
   const [opponentProgress, setOpponentProgress] = useState<RaceProgress | null>(null);
 
@@ -360,19 +364,29 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
     }
     lastPointRef.current = pos;
     if (courseRef.current && courseRef.current.length >= 2) {
-      // How far down the course road you've got, fix by fix: never
-      // backwards, and a course that doubles back near itself can't jump
-      // you ahead (see advanceAlongPolyline).
+      // How far towards the finish you've got, fix by fix: never backwards,
+      // and a course that doubles back near itself can't jump you ahead.
+      // Leave the course and it lays a new one from where you are to the
+      // same finish line instead of stalling the race (CourseFollower).
+      if (!followerRef.current) {
+        followerRef.current = new CourseFollower(courseRef.current, targetDistanceRef.current, false);
+      }
+      const follower = followerRef.current;
+      let reachedEnd = false;
+      let wantsReroute = false;
       for (const p of points) {
-        const gap = lastFixTRef.current ? p.t - lastFixTRef.current : 1000;
-        lastFixTRef.current = p.t;
-        distanceCoveredRef.current = advanceAlongPolyline(
-          courseRef.current,
-          courseCumRef.current,
-          { lat: p.lat, lng: p.lng },
-          distanceCoveredRef.current,
-          aheadWindowM(gap)
-        ).distanceAlongM;
+        const u = follower.update({ lat: p.lat, lng: p.lng }, p.t);
+        distanceCoveredRef.current = u.coveredM;
+        if (u.finished) reachedEnd = true;
+        if (u.needsReroute) wantsReroute = true;
+      }
+      if (reachedEnd) distanceCoveredRef.current = targetDistanceRef.current;
+      if (wantsReroute && !reachedEnd) {
+        setRerouting(true);
+        follower.reroute(pos).then((changed) => {
+          setRerouting(false);
+          if (changed && !finishedRef.current) setCourse(follower.points);
+        });
       }
     } else {
       // No course: the compass axis. Never below zero, so driving the wrong
@@ -420,6 +434,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
       startPointRef.current = null;
       distanceCoveredRef.current = 0;
       lastFixTRef.current = 0;
+      followerRef.current = null;
       setBackgroundLocationListener(handleLocationPoints, "race");
       await startBackgroundTracking(`Racing ${race?.opponentDisplayName ?? "another driver"} -- tap to return to Phantom Racing.`, "race");
     })();
@@ -530,7 +545,8 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   }
 
   const targetM = race.distanceM;
-  const myProgressPct = targetM > 0 ? Math.min(1, distanceCoveredM / targetM) : 0;
+  const myProgressPct =
+    targetDistanceRef.current > 0 ? Math.min(1, distanceCoveredM / targetDistanceRef.current) : 0;
   const opponentProgressPct =
     targetM > 0 && opponentProgress ? Math.min(1, opponentProgress.distanceM / targetM) : 0;
 
@@ -622,7 +638,11 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
           <Text style={styles.raceLabel} numberOfLines={1}>
             {race.distanceLabel} {race.directionLabel} VS {race.opponentDisplayName}
           </Text>
-          {course && <Text style={styles.courseHint}>Follow the gold line</Text>}
+          {course && (
+            <Text style={styles.courseHint}>
+              {rerouting ? "Off the course -- new route to the finish..." : "Follow the gold line"}
+            </Text>
+          )}
           <Text style={styles.time}>{formatDuration(elapsedMs)}</Text>
           <Text style={styles.speed}>
             {displaySpeedKmh(speedKmh, units)} {speedUnit(units)}

@@ -29,6 +29,8 @@ import { useStaleSpeedReset } from "../utils/speed";
 import { feedTrackTimer, refreshTrackTimerTracks } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import MapCameraControls from "../components/MapCameraButtons";
+import MinimapFrame from "../components/MinimapFrame";
+import { useMinimapMode } from "../minimap";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "CreateSegment">;
@@ -63,6 +65,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
   const maxSpeedRef = useRef(0);
   const mapRef = useRef<MapView | null>(null);
   const camera = useFollowCamera(mapRef);
+  const [minimap] = useMinimapMode();
   // Keeps this device visible on other users' maps while recording -- see
   // usePresenceHeartbeat.
   const presencePosRef: PresencePositionRef = useRef(null);
@@ -281,6 +284,7 @@ export default function CreateSegmentScreen({ navigation }: Props) {
         )}
         <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
+      {minimap && <MinimapFrame headingDeg={camera.mode === "heading" ? heading : 0} />}
 
       <MapCameraControls
         viewLabel={camera.viewLabel}

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/phantom_minimap_widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:padding="4dp">
+
+  <ImageView
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_gravity="center"
+    android:adjustViewBounds="true"
+    android:contentDescription="@string/phantom_minimap_widget_label"
+    android:scaleType="fitCenter"
+    android:src="@drawable/phantom_minimap_widget_art" />
+
+  <TextView
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_gravity="bottom|center_horizontal"
+    android:layout_marginBottom="14dp"
+    android:letterSpacing="0.2"
+    android:text="MINIMAP"
+    android:textColor="#2CE8F5"
+    android:textSize="10sp"
+    android:textStyle="bold" />
+</FrameLayout>

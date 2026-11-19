@@ -29,6 +29,8 @@ import { useStaleSpeedReset } from "../utils/speed";
 import { feedTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import MapCameraControls from "../components/MapCameraButtons";
+import MinimapFrame from "../components/MinimapFrame";
+import { useMinimapMode, setMinimapRoute } from "../minimap";
 
 // Your own driven line is thinned to a point every this-many metres, and
 // halved again if it gets huge -- a 200 mile race would otherwise draw tens
@@ -84,6 +86,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
 
   const mapRef = useRef<MapView | null>(null);
   const camera = useFollowCamera(mapRef);
+  const [minimap] = useMinimapMode();
   const lastFixTRef = useRef(0);
   // Progress posts go out from the GPS handler too, not only the timer:
   // JS timers stall while the phone is locked, GPS batches don't, and a
@@ -117,6 +120,11 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
   // one, progress is how far along that road you are (which keeps counting
   // through its turns); without one, it falls back to the compass axis.
   const [course, setCourse] = useState<LatLng[] | null>(null);
+  // The line you're following, for the minimap bubble over other apps.
+  useEffect(() => {
+    setMinimapRoute("race", course);
+  }, [course]);
+  useEffect(() => () => setMinimapRoute("race", null), []);
   const courseRef = useRef<LatLng[] | null>(null);
   const courseCumRef = useRef<number[]>([]);
   const presencePosRef: PresencePositionRef = useRef(null);
@@ -601,6 +609,7 @@ export default function RaceLiveScreen({ route, navigation }: Props) {
           </Marker>
         )}
       </MapView>
+      {minimap && <MinimapFrame headingDeg={camera.mode === "heading" ? heading : 0} />}
 
       <Pressable style={[styles.cancelButton, { top: insets.top + 10 }]} onPress={onBail} hitSlop={10}>
         <Text style={styles.cancelText}>x</Text>

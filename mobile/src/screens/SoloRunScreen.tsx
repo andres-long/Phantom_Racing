@@ -29,6 +29,8 @@ import { CourseFollower } from "../courseFollower";
 import { feedTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import MapCameraControls from "../components/MapCameraButtons";
+import MinimapFrame from "../components/MinimapFrame";
+import { useMinimapMode, setMinimapRoute } from "../minimap";
 
 type Props = NativeStackScreenProps<RootStackParamList, "SoloRun">;
 
@@ -80,6 +82,12 @@ export default function SoloRunScreen({ route, navigation }: Props) {
   const followerRef = useRef<CourseFollower | null>(null);
   const [rerouting, setRerouting] = useState(false);
   const camera = useFollowCamera(mapRef);
+  const [minimap] = useMinimapMode();
+  // The line you're following, for the minimap bubble over other apps.
+  useEffect(() => {
+    setMinimapRoute("solo", course);
+  }, [course]);
+  useEffect(() => () => setMinimapRoute("solo", null), []);
   const presencePosRef: PresencePositionRef = useRef(null);
   usePresenceHeartbeat(presencePosRef);
   const markFix = useStaleSpeedReset(() => setSpeedKmh(0));
@@ -403,6 +411,7 @@ export default function SoloRunScreen({ route, navigation }: Props) {
           </Marker>
         )}
       </MapView>
+      {minimap && <MinimapFrame headingDeg={camera.mode === "heading" ? heading : 0} />}
 
       <Pressable style={[styles.topButton, { top: insets.top + 10, left: 16, width: 36 }]} onPress={onClose} hitSlop={10}>
         <Text style={styles.topButtonText}>x</Text>

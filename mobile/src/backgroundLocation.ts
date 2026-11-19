@@ -27,6 +27,7 @@ import * as Location from "expo-location";
 import { Alert, AppState, Linking, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { cleanSpeedKmh } from "./utils/speed";
+import { feedMinimap } from "./minimap";
 
 export const BACKGROUND_LOCATION_TASK = "nfs-background-location-task";
 
@@ -38,7 +39,9 @@ export type BackgroundLocationPoint = {
   speedKmh: number;
 };
 
-export type TrackingOwner = "run" | "segment" | "trip" | "race" | "solo";
+// "minimap": the minimap bubble over other apps keeps GPS running so it can
+// follow you while the app is in the background (nothing is recorded).
+export type TrackingOwner = "run" | "segment" | "trip" | "race" | "solo" | "minimap";
 
 type Listener = (points: BackgroundLocationPoint[]) => void;
 const listeners = new Map<TrackingOwner, Listener>();
@@ -63,7 +66,10 @@ const WATCHDOG_INTERVAL_MS = 20000;
 
 export function setBackgroundLocationListener(fn: Listener | null, owner: TrackingOwner) {
   if (fn) {
+    const wasListening = listeners.has(owner);
     listeners.set(owner, fn);
+    // Only a recording coming back for its own points gets the backlog.
+    if (wasListening) return;
     // Hand over anything that arrived while nobody was listening.
     if (pendingPoints.length > 0) {
       const backlog = pendingPoints.splice(0, pendingPoints.length);
@@ -95,14 +101,18 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   }));
 
   lastPointAt = Date.now();
-  if (listeners.size === 0) {
-    // Nobody listening right now (JS just restarted, or a screen is
-    // re-registering) -- keep them for the next listener instead of losing
-    // part of the drive.
+  // The minimap bubble follows you whatever's recording.
+  const last = points[points.length - 1];
+  feedMinimap({ lat: last.lat, lng: last.lng, heading: last.heading, speedKmh: last.speedKmh });
+  // A recording whose screen isn't listening right now (JS just restarted,
+  // or the screen is re-registering): keep the points for it instead of
+  // losing part of the drive.
+  const unheard = [...activeOwners].some((o) => o !== "minimap" && !listeners.has(o));
+  if (unheard) {
     pendingPoints.push(...points);
     if (pendingPoints.length > MAX_PENDING_POINTS) pendingPoints.splice(0, pendingPoints.length - MAX_PENDING_POINTS);
-    return;
   }
+  if (listeners.size === 0) return;
   for (const listener of listeners.values()) {
     try {
       listener(points);
@@ -227,8 +237,8 @@ export async function startBackgroundTracking(notificationBody: string, owner: T
 export async function stopBackgroundTracking(owner: TrackingOwner) {
   activeOwners.delete(owner);
   listeners.delete(owner);
+  if (![...activeOwners].some((o) => o !== "minimap")) pendingPoints.length = 0;
   if (activeOwners.size > 0) return;
-  pendingPoints.length = 0;
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(
     () => false
   );

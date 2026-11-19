@@ -417,6 +417,9 @@ export type RootStackParamList = {
   // `route`: the line you drove, for sharing the trip.
   GoSummary: { result: SubmitTripResponse; route?: LatLng[]; trackId?: string; trackName?: string };
   Stats: undefined;
+  // The round NFS-style minimap, full screen (also opened by the
+  // home-screen widget).
+  Minimap: undefined;
   RaceLive: { raceId: string };
   SoloRun: { distanceKey: RaceDistanceKey; directionKey: RaceDirectionKey; shape?: SoloShape };
   RaceResult: { raceId: string };

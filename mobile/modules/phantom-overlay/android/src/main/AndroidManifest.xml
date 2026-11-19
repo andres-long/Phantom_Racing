@@ -1,0 +1,19 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- The minimap bubble floats over other apps. -->
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+  <application>
+    <!-- Home-screen widget: a round minimap button that opens the app's Minimap screen. -->
+    <receiver
+      android:name="expo.modules.phantomoverlay.MinimapWidgetProvider"
+      android:exported="true"
+      android:label="@string/phantom_minimap_widget_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/phantom_minimap_widget_info" />
+    </receiver>
+  </application>
+</manifest>

@@ -29,9 +29,10 @@ import { RACE_DIRECTIONS } from "../raceDirections";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { cleanSpeedKmh, useStaleSpeedReset } from "../utils/speed";
 import NeonButton from "../components/NeonButton";
-import { CameraButton, TargetButton, CompassButton } from "../components/MapCameraButtons";
+import { CameraButton, TargetButton, CompassButton, MinimapButton } from "../components/MapCameraButtons";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import { feedTrackTimer } from "../trackTimer";
+import { feedMinimap, setMinimapUnits } from "../minimap";
 import { goToTrackStart } from "../goToTrack";
 import { isHpMatch, carLabel } from "../utils/car";
 import VehicleMarker from "../components/VehicleMarker";
@@ -84,6 +85,9 @@ function regionToBounds(region: Region): MapBounds {
 // (the "All tracks" button), since that's a secondary, occasional action.
 export default function HomeScreen({ navigation, route }: Props) {
   const { user, vehicleStyle, incognito, voiceEnabled, units, showTracks, setShowTracks } = useUser();
+  useEffect(() => {
+    setMinimapUnits(units === "imperial");
+  }, [units]);
   // Set when this Home was opened *on top of* a drive or race that's still
   // running underneath (the MAP button on those screens pushes it here), so
   // you can look around without ending what you were doing. Going back drops
@@ -340,6 +344,7 @@ export default function HomeScreen({ navigation, route }: Props) {
         recordSpeed(currentSpeedKmh);
         // Rolling through a track's start times you along it, silently.
         feedTrackTimer({ lat: pos.lat, lng: pos.lng, t: loc.timestamp || Date.now(), speedKmh: currentSpeedKmh });
+        feedMinimap({ lat: pos.lat, lng: pos.lng, heading: validHeading, speedKmh: currentSpeedKmh });
       };
 
       (async () => {
@@ -938,6 +943,12 @@ export default function HomeScreen({ navigation, route }: Props) {
         </Text>
       </Pressable>
 
+      {/* The NFS-style round minimap, full screen. */}
+      <MinimapButton
+        on={false}
+        onPress={() => navigation.navigate("Minimap")}
+        style={{ position: "absolute", right: 16, bottom: hudBottom + 266 }}
+      />
       <CompassButton
         mode={camera.mode}
         onPress={camera.toggleMode}

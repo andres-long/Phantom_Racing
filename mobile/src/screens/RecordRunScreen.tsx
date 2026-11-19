@@ -38,6 +38,8 @@ import { recordSpeed, flushTopSpeed } from "../topSpeed";
 import { feedTrackTimer, suppressTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import MapCameraControls from "../components/MapCameraButtons";
+import MinimapFrame from "../components/MinimapFrame";
+import { useMinimapMode, setMinimapRoute } from "../minimap";
 import { CHECKPOINT_NAMES } from "../components/SplitsTable";
 
 // A crossed checkpoint's readout stays up this long.
@@ -90,6 +92,12 @@ export default function RecordRunScreen({ route, navigation }: Props) {
   const checkpointsRef = useRef<TrackCheckpoint[]>([]);
   const nextCheckpointRef = useRef(0);
   const camera = useFollowCamera(mapRef);
+  const [minimap] = useMinimapMode();
+  // The line you're following, for the minimap bubble over other apps.
+  useEffect(() => {
+    setMinimapRoute("track", segment?.points ?? null);
+  }, [segment]);
+  useEffect(() => () => setMinimapRoute("track", null), []);
   // Keeps this device visible on other users' maps while racing -- see
   // usePresenceHeartbeat. Updated inline in handleLocationPoints below
   // rather than via a separate effect, so it stays current without adding
@@ -423,6 +431,7 @@ export default function RecordRunScreen({ route, navigation }: Props) {
         )}
         <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
+      {minimap && <MinimapFrame headingDeg={camera.mode === "heading" ? heading : 0} />}
 
       <Pressable style={[styles.cancelButton, { top: insets.top + 10 }]} onPress={onCancel} hitSlop={10}>
         <Text style={styles.cancelText}>x</Text>

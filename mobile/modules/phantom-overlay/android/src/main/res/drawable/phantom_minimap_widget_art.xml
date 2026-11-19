@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's face: an NFS-style round minimap -- dark scope, glowing cyan
+     rim with ticks, a few roads, the route in gold, your arrow in the middle
+     and a red N on the rim. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="120dp"
+  android:height="120dp"
+  android:viewportWidth="120"
+  android:viewportHeight="120">
+
+  <!-- Soft outer glow. -->
+  <path android:pathData="M60,2 A58,58 0 1,1 59.99,2 Z" android:fillColor="#222CE8F5" />
+  <!-- The scope. -->
+  <path android:pathData="M60,8 A52,52 0 1,1 59.99,8 Z" android:fillColor="#F2070B12" />
+  <!-- Range ring and cross hairs. -->
+  <path android:pathData="M60,34 A26,26 0 1,1 59.99,34 Z" android:strokeColor="#332CE8F5" android:strokeWidth="1" android:fillColor="#00000000" />
+  <path android:pathData="M8,60 L112,60 M60,8 L60,112" android:strokeColor="#1A2CE8F5" android:strokeWidth="1" />
+  <!-- Roads. -->
+  <path android:pathData="M18,86 L44,70 L60,60 L74,48 L98,30" android:strokeColor="#3D4F66" android:strokeWidth="4" android:strokeLineCap="round" android:strokeLineJoin="round" />
+  <path android:pathData="M30,28 L48,46 L60,60 L72,78 L80,104" android:strokeColor="#3D4F66" android:strokeWidth="3" android:strokeLineCap="round" android:strokeLineJoin="round" />
+  <path android:pathData="M14,52 L42,56 L60,60 L104,66" android:strokeColor="#2A384A" android:strokeWidth="2.5" android:strokeLineCap="round" />
+  <!-- Your route. -->
+  <path android:pathData="M60,62 L60,44 L74,34 L84,18" android:strokeColor="#FFCF3D" android:strokeWidth="3.5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+  <!-- A rival. -->
+  <path android:pathData="M86,76 A4,4 0 1,1 85.99,76 Z" android:fillColor="#FF5023" />
+  <!-- The rim. -->
+  <path android:pathData="M60,8 A52,52 0 1,1 59.99,8 Z" android:strokeColor="#552CE8F5" android:strokeWidth="5" android:fillColor="#00000000" />
+  <path android:pathData="M60,8 A52,52 0 1,1 59.99,8 Z" android:strokeColor="#2CE8F5" android:strokeWidth="2" android:fillColor="#00000000" />
+  <!-- Ticks. -->
+  <path android:pathData="M60,4 L60,10 M116,60 L110,60 M60,116 L60,110 M4,60 L10,60" android:strokeColor="#2CE8F5" android:strokeWidth="2" />
+  <!-- You. -->
+  <path android:pathData="M60,49 L68,69 L60,64 L52,69 Z" android:fillColor="#EEF6FF" android:strokeColor="#2CE8F5" android:strokeWidth="1.5" android:strokeLineJoin="round" />
+  <!-- North. -->
+  <path android:pathData="M60,1 A7,7 0 1,1 59.99,1 Z" android:fillColor="#05070C" android:strokeColor="#FF5023" android:strokeWidth="1.5" />
+  <path android:pathData="M57.2,11 L57.2,5 L62.8,11 L62.8,5" android:strokeColor="#FF5023" android:strokeWidth="1.4" android:strokeLineJoin="round" android:strokeLineCap="round" />
+</vector>

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, StyleSheet, StyleProp, ViewStyle } from "react-native";
 import Svg, { Circle, Line, Path, Rect } from "react-native-svg";
 import { colors } from "../theme";
+import { useMinimapMode } from "../minimap";
 
 // Map buttons for the follow camera (see useFollowCamera): a camera that
 // switches between close / street / wide views, and a target that puts you
@@ -152,6 +153,40 @@ export function CompassButton({
   );
 }
 
+// A round scope with a sweep line: the NFS-style minimap.
+export function RadarIcon({ size = 22, color = colors.cyan }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx={12} cy={12} r={9.5} stroke={color} strokeWidth={1.8} />
+      <Circle cx={12} cy={12} r={5} stroke={color} strokeWidth={1.2} opacity={0.6} />
+      <Line x1={12} y1={12} x2={18.7} y2={5.3} stroke={color} strokeWidth={1.8} strokeLinecap="round" />
+      <Path d="M12 8.6 L14.2 14.4 L12 13.2 L9.8 14.4 Z" fill={color} />
+    </Svg>
+  );
+}
+
+// Minimap mode on/off: the map seen through a glowing circle, NFS style.
+export function MinimapButton({
+  on,
+  onPress,
+  style,
+}: {
+  on: boolean;
+  onPress: () => void;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <Pressable
+      style={[styles.button, on && styles.buttonLit, style]}
+      onPress={onPress}
+      hitSlop={6}
+      accessibilityLabel={on ? "Full map" : "Minimap"}
+    >
+      <RadarIcon color={on ? colors.cyan : colors.textSecondary} />
+    </Pressable>
+  );
+}
+
 // All three, stacked on the right edge of a driving screen's map.
 export default function MapCameraControls({
   viewLabel,
@@ -171,8 +206,10 @@ export default function MapCameraControls({
   // Pinned this far from the bottom; otherwise it sits mid-way down.
   bottom?: number;
 }) {
+  const [minimap, toggleMinimap] = useMinimapMode();
   return (
     <View style={[styles.stack, bottom != null ? { bottom } : { top: "40%" }]} pointerEvents="box-none">
+      <MinimapButton on={minimap} onPress={toggleMinimap} style={{ marginBottom: 10 }} />
       <CompassButton mode={mode} onPress={onToggleMode} style={{ marginBottom: 10 }} />
       <CameraButton viewLabel={viewLabel} onPress={onCycleView} />
       <TargetButton following={following} onPress={onRecenter} style={{ marginTop: 10 }} />

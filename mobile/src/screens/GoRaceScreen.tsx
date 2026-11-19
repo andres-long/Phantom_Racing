@@ -29,6 +29,8 @@ import { useStaleSpeedReset } from "../utils/speed";
 import { feedTrackTimer } from "../trackTimer";
 import { useFollowCamera } from "../hooks/useFollowCamera";
 import MapCameraControls from "../components/MapCameraButtons";
+import MinimapFrame from "../components/MinimapFrame";
+import { useMinimapMode, setMinimapRoute } from "../minimap";
 import { recordSpeed, flushTopSpeed } from "../topSpeed";
 
 type Props = NativeStackScreenProps<RootStackParamList, "GoRace">;
@@ -77,6 +79,12 @@ export default function GoRaceScreen({ route, navigation }: Props) {
 
   const mapRef = useRef<MapView | null>(null);
   const camera = useFollowCamera(mapRef);
+  const [minimap] = useMinimapMode();
+  // The line you're following, for the minimap bubble over other apps.
+  useEffect(() => {
+    setMinimapRoute("goto", plannedRoute);
+  }, [plannedRoute]);
+  useEffect(() => () => setMinimapRoute("goto", null), []);
   // The background-location listener is registered once (empty-deps mount
   // effect below) so its closure would otherwise keep seeing the route from
   // that first render forever, even after a reroute swaps `plannedRoute` --
@@ -359,6 +367,7 @@ export default function GoRaceScreen({ route, navigation }: Props) {
         )}
         <RacerMarkers racers={nearbyRacers} onSelect={challengeRacer} />
       </MapView>
+      {minimap && <MinimapFrame headingDeg={camera.mode === "heading" ? heading : 0} />}
 
       <MapCameraControls
         viewLabel={camera.viewLabel}

@@ -1,0 +1,6 @@
+{
+  "name": "phantom-overlay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phantom Racing's floating minimap bubble and home-screen minimap widget (Android)."
+}

@@ -1,5 +1,5 @@
-import React from "react";
-import { View, StyleSheet, ActivityIndicator } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { View, StyleSheet, ActivityIndicator, Linking } from "react-native";
 import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../types";
@@ -23,6 +23,7 @@ import RaceLiveScreen from "../screens/RaceLiveScreen";
 import RaceResultScreen from "../screens/RaceResultScreen";
 import SoloRunScreen from "../screens/SoloRunScreen";
 import ShareDriveScreen from "../screens/ShareDriveScreen";
+import MinimapScreen from "../screens/MinimapScreen";
 import TrackTimerToast from "../components/TrackTimerToast";
 import { navigationRef } from "./navigationRef";
 
@@ -119,14 +120,51 @@ export default function AppNavigator() {
             <Stack.Screen name="RaceResult" component={RaceResultScreen} />
             <Stack.Screen name="SoloRun" component={SoloRunScreen} />
             <Stack.Screen name="ShareDrive" component={ShareDriveScreen} />
+            <Stack.Screen name="Minimap" component={MinimapScreen} options={{ animation: "fade" }} />
           </>
         )}
       </Stack.Navigator>
       </NavigationContainer>
       {/* Times you through any track you drive, whatever screen is up. */}
       <TrackTimerToast />
+      <MinimapDeepLink />
     </ProximityVoiceProvider>
   );
+}
+
+// The home-screen minimap widget opens phantomracing://minimap: go straight
+// to the Minimap screen -- once you're signed in and the app is up.
+function MinimapDeepLink() {
+  const { user } = useUser();
+  const pending = useRef(false);
+  const signedIn = useRef(!!user);
+  signedIn.current = !!user;
+
+  const tryOpen = () => {
+    if (!pending.current || !signedIn.current || !navigationRef.isReady()) return;
+    pending.current = false;
+    navigationRef.navigate("Minimap");
+  };
+
+  useEffect(() => {
+    const handle = (url: string | null) => {
+      if (!url || !/^phantomracing:\/\/minimap/i.test(url)) return;
+      pending.current = true;
+      // Give a cold start a moment to put Home up first.
+      setTimeout(tryOpen, 400);
+    };
+    Linking.getInitialURL()
+      .then(handle)
+      .catch(() => {});
+    const sub = Linking.addEventListener("url", (e) => handle(e.url));
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    if (user) setTimeout(tryOpen, 600);
+  }, [user]);
+
+  return null;
 }
 
 const styles = StyleSheet.create({
